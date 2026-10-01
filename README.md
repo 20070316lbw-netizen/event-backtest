@@ -34,6 +34,10 @@ event-backtest run --config cn --db data/ashare.db --freq 30 \
 # 美股日线
 event-backtest run --config us --strategy volume_breakout \
   --start 2024-01-01 --end 2024-12-31
+
+# A 股 10 年日线(股票池; 数据先用 scripts/update_ashare.py 抓进 data/ashare.db)
+event-backtest run --config cn_stock --strategy volume_breakout \
+  --start 2016-10-10 --end 2026-09-30
 ```
 
 输出目录含 `nav.parquet` / `fills.parquet` / `orders.parquet` / `trades.parquet` /

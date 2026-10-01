@@ -1,0 +1,46 @@
+# A 股 10 年日线的股票池配置。数据由 scripts/update_ashare.py 抓进 data/ashare.db。
+#
+# 为什么要单独一份: BaoStock 的 ETF 日线只有 2026 年之后的(见 setting/cn.yaml),
+# 撑不起长区间; 这里的 10 只股票有 2016-10 至今的完整日线, 适合做多年样本外。
+market: cn
+
+data:
+  db_path: ../../../data/ashare.db      # scripts/update_ashare.py 写的就是这里
+  freq: null                            # 日线
+
+universe:
+  - 600519.SH   # 贵州茅台
+  - 601318.SH   # 中国平安
+  - 600036.SH   # 招商银行
+  - 000001.SZ   # 平安银行
+  - 000333.SZ   # 美的集团
+  - 000651.SZ   # 格力电器
+  - 002415.SZ   # 海康威视
+  - 002594.SZ   # 比亚迪
+  - 600900.SH   # 长江电力
+  - 601166.SH   # 兴业银行
+
+benchmark: null   # 库里 6 只 ETF 只有 2026 起的数据, 当不了 10 年基准
+
+account:
+  initial_cash: 1000000
+
+execution:
+  fill_price: open
+
+fees:
+  stock:
+    commission: 0.00025
+    min_commission: 5
+    stamp_duty: 0.0005
+    transfer_fee: 0.00001
+
+# 交易规则覆盖(不写的字段用 CNMarketRules 默认值)
+rules:
+  main_limit: 0.10
+  growth_limit: 0.20
+  bse_limit: 0.30
+  fund_limit: 0.10
+  st_limits:
+    1998-04-22: 0.05
+    2026-07-06: 0.10
