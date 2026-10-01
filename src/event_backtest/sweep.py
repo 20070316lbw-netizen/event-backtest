@@ -65,7 +65,7 @@ def expand_grid(grid: Mapping[str, Sequence[object]]) -> list[dict[str, object]]
             for values in itertools.product(*(grid[key] for key in keys))]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class SweepResult:
     """一次网格搜索的结果。
 

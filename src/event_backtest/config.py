@@ -8,14 +8,15 @@
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, replace
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, fields, is_dataclass, replace
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from event_backtest.engine import BacktestResult
+from event_backtest.engine import BacktestResult, Context, ContextStrategy
 from event_backtest.engine import run as run_backtest
 from event_backtest.fees import FeeSchedule
 from event_backtest.market import DateLike, MarketData, load_market
@@ -112,8 +113,9 @@ class MarketConfig:
                            freq=self.freq if freq is None else freq,
                            rules=self.resolved_rules())
 
-    def run(self, strategy: object, start: DateLike | None = None,
-            end: DateLike | None = None, freq: str | int | None = None) -> BacktestResult:
+    def run(self, strategy: ContextStrategy | Callable[[Context], None],
+            start: DateLike | None = None, end: DateLike | None = None,
+            freq: str | int | None = None) -> BacktestResult:
         """读出行情并跑一遍回测, 规则 / 费率 / 成交价 / 滑点 / 初始资金都来自本配置。
 
         Args:
@@ -122,12 +124,44 @@ class MarketConfig:
             freq: 临时覆盖配置里的 freq。
 
         Returns:
-            BacktestResult。
+            BacktestResult; meta 里带上本配置的上下文(market / benchmark / db_path /
+            fill_price / freq 等), 后续 summarize / benchmark_nav 可以直接用。
         """
         market = self.load(start, end, freq)
-        return run_backtest(strategy, market, initial_cash=self.initial_cash,
-                            fees=self.resolved_fees(), fill_price=self.fill_price,
-                            slippage=self.slippage, rules=self.resolved_rules())
+        result = run_backtest(strategy, market, initial_cash=self.initial_cash,
+                              fees=self.resolved_fees(), fill_price=self.fill_price,
+                              slippage=self.slippage, rules=self.resolved_rules())
+        result.meta.update(self.describe())
+        return result
+
+    def describe(self) -> dict[str, Any]:
+        """本配置的可序列化摘要(给 BacktestResult.meta 与 run.json 清单用)。
+
+        Returns:
+            含 market / benchmark / db_path / config_path / initial_cash / fill_price /
+            freq / tickers / slippage / fees 的字典。
+        """
+        return {
+            "market": self.market,
+            "benchmark": self.benchmark,
+            "db_path": str(self.db_path),
+            "config_path": str(self.path) if self.path is not None else None,
+            "initial_cash": float(self.initial_cash),
+            "fill_price": self.fill_price,
+            "freq": self.freq,
+            "tickers": list(self.tickers) if self.tickers else None,
+            "slippage": _describe_slippage(self.slippage),
+            "fees": {name: asdict(schedule) for name, schedule in self.resolved_fees().items()},
+        }
+
+
+def _describe_slippage(model: SlippageModel | None) -> dict[str, Any] | None:
+    """滑点模型 -> 可序列化摘要; None 表示不调价。"""
+    if model is None:
+        return None
+    if is_dataclass(model):
+        return {"type": type(model).__name__, **asdict(model)}
+    return {"type": type(model).__name__}
 
 
 def load_config(which: str | Path = "us", *,

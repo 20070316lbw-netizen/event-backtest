@@ -35,7 +35,7 @@ DateLike = str | date | datetime
 _BAR_FIELDS = ("open", "high", "low", "close", "volume", "amount")
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class MarketData:
     """对齐后的行情。除注明外都是 (T, N) float64 数组, 缺失为 NaN。
 

@@ -96,7 +96,7 @@ class Fill:
     order_created: int
 
 
-@dataclass
+@dataclass(eq=False)
 class Portfolio:
     """组合状态: 现金、持仓数量、可卖数量、持仓成本均价。
 

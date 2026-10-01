@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import html as _html
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -37,6 +38,9 @@ from event_backtest.metrics import (
 )
 from event_backtest.report import format_value, result_sections
 from event_backtest.walkforward import WalkForwardResult
+
+if TYPE_CHECKING:
+    from event_backtest.results import Run
 
 __all__ = [
     "HtmlReport",
@@ -385,13 +389,14 @@ _COMPARE_COLUMNS = [
 ]
 
 
-def plot_comparison_html(results: dict[str, BacktestResult], *, market: str = "us",
+def plot_comparison_html(results: Mapping[str, BacktestResult | Run], *, market: str = "us",
                          benchmark: str | None = None, title: str = "场景对比",
                          normalize: bool = True, generated: datetime | None = None) -> HtmlReport:
     """多场景对比 HTML: 叠加净值 + 可排序的指标表。
 
     Args:
-        results: {场景名: BacktestResult}, 通常来自同一份公共配置派生的变体。
+        results: {场景名: BacktestResult 或 Run}, 通常来自同一份公共配置派生的变体
+            (EventBackTest.compare 直接返回 {场景名: Run}, 可以直接传进来)。
         market: 年化口径。
         benchmark: 基准代码(传给 summarize, 用来算超额 / Beta)。
         title: 页面标题。
@@ -401,10 +406,12 @@ def plot_comparison_html(results: dict[str, BacktestResult], *, market: str = "u
     Returns:
         HtmlReport(kind="comparison")。
     """
-    index = pd.DatetimeIndex(sorted(set().union(*[set(r.nav.index) for r in results.values()])))
+    # 兼容 Run(带上下文的结果包装): 直接用它的 result
+    models = {name: getattr(item, "result", item) for name, item in results.items()}
+    index = pd.DatetimeIndex(sorted(set().union(*[set(r.nav.index) for r in models.values()])))
     labels = _labels(index)
     series = []
-    for name, result in results.items():
+    for name, result in models.items():
         nav = pd.to_numeric(result.nav.reindex(index).ffill(), errors="coerce")
         if normalize:
             base = nav.dropna()
@@ -412,7 +419,7 @@ def plot_comparison_html(results: dict[str, BacktestResult], *, market: str = "u
         series.append({"name": str(name), "values": _values(nav)})
 
     rows = []
-    for name, result in results.items():
+    for name, result in models.items():
         frame_values = {**summarize(result.nav, market=market,
                                     benchmark_nav=benchmark_nav(result, benchmark)).to_dict(),
                         **trade_stats(trades(result.fills)).to_dict(),
@@ -424,7 +431,7 @@ def plot_comparison_html(results: dict[str, BacktestResult], *, market: str = "u
     payload: dict[str, Any] = {
         "kind": "comparison",
         "title": title,
-        "subtitle": f"{market} · {len(results)} 个场景 · "
+        "subtitle": f"{market} · {len(models)} 个场景 · "
                     + ("净值归一到 1" if normalize else "原始净值"),
         "generated": (generated or datetime.now()).strftime("%Y-%m-%d %H:%M"),
         "nav": {

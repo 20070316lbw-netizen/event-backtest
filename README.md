@@ -56,19 +56,55 @@ cancelled)、没成交时的 `reason`(如"涨停买不进"/"现金不足"/"回�
 `execution.csv`(即 `metrics.execution_stats`)给执行率(数量口径)、换手(双边成交额 /
 平均净值)与费用占比; 终端报告在有拒单时会多打一张"拒单原因"表。
 
-## Python
+## 一个类跑一圈: `EventBackTest`
+
+给调用者的入口就这一个类: 超参数式构造 + 有补全的方法, 一次跑完/存盘/出图。
 
 ```python
-from event_backtest import DeclarativeStrategy, load_config, load_strategy, study_events
+from event_backtest import EventBackTest, FixedSlippage
+
+backtest = EventBackTest(
+    market="us",                 # 或 "cn" / yaml 路径 / MarketConfig
+    start="2016-10-01", end="2026-09-30",
+    universe=None,               # None = 库里全部证券; 不传 = 用配置里的
+    initial_cash=1_000_000, fill_price="open",
+    strategy="volume_breakout",
+)
+run = backtest.run()                    # -> Run(净值 / 成交 / 委托 / 上下文)
+run.summary()["sharpe"]                 # 指标: 自动知道 market / benchmark
+run.execution()["execution_rate"]       # 执行率 / 拒单 / 换手
+run.print()                             # 终端分组表
+run.study(bootstrap=2000)               # 事件研究 + 显著性检验
+run.save("outputs/us_full", html=True)  # parquet / csv / run.json + tearsheet.html
+
+backtest.walk_forward()                                   # 样本外
+backtest.sweep({"exit.hold_bars": [8, 16, 32]})           # 扫参(样本内)
+runs = backtest.compare({"基准": {}, "滑点0.05": {"slippage": FixedSlippage(0.05)}})
+```
+
+**组件没有被藏起来** —— 门面只是把它们按"一次完整运行"组装好, 细粒度控制照旧:
+
+```python
+from event_backtest import (load_config, resolve_strategy, run, study_events,
+                            run_walk_forward, search, Run, save_run)
 
 cfg = load_config("cn")
-market = cfg.load(start="2026-01-05", end="2026-09-24", freq="30")
-spec = load_strategy("volume_breakout")
-result = cfg.run(DeclarativeStrategy(spec), start="2026-01-05", end="2026-09-24", freq="30")
+market = cfg.load(start="2026-01-05", end="2026-09-24", freq="30")   # 自己复用这份行情
+strategy, spec = resolve_strategy("volume_breakout")
+result = run(strategy, market, initial_cash=cfg.initial_cash, fees=cfg.resolved_fees(),
+             fill_price=cfg.fill_price, slippage=cfg.slippage, rules=cfg.resolved_rules())
 study = study_events(market, spec.events(spec.compute(market), market), strategy_name=spec.name)
 study.summary        # 每个 horizon 的均值 / 基线 / 超额 / 胜率
 study.tests_table()  # 显著性: 均值 / t / p / bootstrap 区间 / 星号
+save_run("outputs/one", result, market="cn", study=study, html=True)
 ```
+
+- `Run`: 把"这次跑的配置 + 结果 + 口径"绑在一起, 于是 `summary()` / `html()` /
+  `save()` 都不用再重复传 market / benchmark。
+- `run.json`: 每次落盘都写一份清单(包版本 / git commit / 配置 / 数据区间 / 费率 /
+  滑点 / 指标快照 / 文件列表), 两次运行才可比、可追溯。
+- CLI `--json`: stdout 只输出机器可读 JSON(日志走 stderr), 方便脚本 / agent 调用;
+  `--bootstrap N` 控制事件研究的重抽次数。
 
 ## 事件研究的显著性
 

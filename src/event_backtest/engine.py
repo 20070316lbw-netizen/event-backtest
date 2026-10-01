@@ -11,8 +11,9 @@
 """
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -163,7 +164,20 @@ class Context:
         return out
 
 
-def run(strategy: object, market: MarketData, *, initial_cash: float,
+class ContextStrategy(Protocol):
+    """引擎接受的策略协议: 只要有 handle_data(ctx)。
+
+    initialize(ctx) 与 on_fill(fill, ctx) 都是可选的; 直接给一个
+    `Callable[[Context], None]` 也可以(见 run 的实现)。
+    """
+
+    def handle_data(self, ctx: Context) -> None:
+        """每根 bar 调一次。"""
+        ...
+
+
+def run(strategy: ContextStrategy | Callable[[Context], None], market: MarketData, *,
+        initial_cash: float,
         fees: Mapping[str, FeeSchedule] | FeeSchedule | None = None,
         fill_price: FillPrice = "open", slippage: SlippageModel | None = None,
         rules: MarketRules | None = None) -> BacktestResult:
@@ -259,7 +273,7 @@ def run(strategy: object, market: MarketData, *, initial_cash: float,
     )
 
 
-@dataclass
+@dataclass(eq=False)
 class BacktestResult:
     """回测输出。
 
@@ -271,6 +285,9 @@ class BacktestResult:
         orders: 委托明细 DataFrame(全部订单, 含被拒 / 期末未成交 / 部分成交),
             列见 broker.ORDER_COLUMNS; status 是 open / filled / rejected / cancelled,
             reason 是没成交的原因, tag 是下单来源。
+        meta: 这次运行的上下文(市场 / 基准 / 库路径 / 初始资金 / 费率口径等);
+            engine.run 只保证建一个空 dict, 由上层(如 MarketConfig.run)填。
+            有了它, summarize / benchmark_nav 这些就不用调用者再重复传参数。
     """
 
     nav: pd.Series
@@ -279,6 +296,7 @@ class BacktestResult:
     portfolio: Portfolio
     orders: pd.DataFrame = field(
         default_factory=lambda: pd.DataFrame(columns=list(ORDER_COLUMNS)))
+    meta: dict[str, Any] = field(default_factory=dict)
 
 
 def _fee_lookup(fees: Mapping[str, FeeSchedule] | FeeSchedule | None, market: MarketData,

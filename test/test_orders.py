@@ -10,10 +10,9 @@ from rich.console import Console
 
 from event_backtest import Strategy, execution_stats, reject_reasons, run
 from event_backtest.broker import ORDER_COLUMNS
-from event_backtest.cli import _write
 from event_backtest.fees import FeeSchedule
-from event_backtest.metrics import summarize, trade_stats, trades
 from event_backtest.report import print_result
+from event_backtest.results import save_run
 from event_backtest.rules import CNMarketRules, MarketRules
 
 
@@ -123,13 +122,12 @@ def test_print_result_shows_execution_and_reject_reasons():
     assert "执行率" in text and "拒单原因" in text and "涨停买不进" in text
 
 
-def test_cli_write_includes_orders_and_execution(tmp_path):
+def test_save_run_includes_orders_and_execution(tmp_path):
     m = make_market([[10.0], [10.0], [10.0]])
     res = run(_Scripted({0: lambda ctx: ctx.order(0, 5)}), m, initial_cash=1000.0,
               fees=FeeSchedule(), rules=MarketRules())
-    order_trades = trades(res.fills)
-    _write(str(tmp_path), res, summarize(res.nav, market="us"),
-           trade_stats(order_trades), order_trades, None)
-    assert (tmp_path / "orders.parquet").exists()
-    assert (tmp_path / "execution.csv").exists()
-    assert (tmp_path / "nav.parquet").exists()
+    out = save_run(tmp_path, res, market="us", strategy="test")
+    assert (out / "orders.parquet").exists()
+    assert (out / "execution.csv").exists()
+    assert (out / "nav.parquet").exists()
+    assert (out / "run.json").exists()

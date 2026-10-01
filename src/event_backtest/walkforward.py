@@ -65,7 +65,7 @@ class FoldRange:
     test_bars: tuple[int, int]
 
 
-@dataclass
+@dataclass(eq=False)
 class FoldResult:
     """一折的测试结果。"""
 
@@ -73,7 +73,7 @@ class FoldResult:
     result: BacktestResult
 
 
-@dataclass
+@dataclass(eq=False)
 class WalkForwardResult:
     """walk-forward 汇总: 每折结果 + 拼接后的样本外净值。"""
 

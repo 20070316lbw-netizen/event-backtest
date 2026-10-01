@@ -30,17 +30,18 @@ import pandas as pd
 from event_backtest.evaluation.stats import bootstrap_mean, mean_t_test, stars
 from event_backtest.market import MarketData
 
-__all__ = ["EventStudy", "study_events"]
+__all__ = ["DEFAULT_HORIZONS", "EventStudy", "study_events"]
 
 # tests 表的列
 _TEST_COLUMNS = ["horizon", "n", "n_obs", "n_days", "mean", "t", "p",
                  "ci_low", "ci_high", "p_boot", "stars"]
 
 # 默认观察窗口: 信号后 1..16 根 bar(30 分钟线下正好两天)
-_DEFAULT_HORIZONS = tuple(range(1, 17))
+DEFAULT_HORIZONS = tuple(range(1, 17))
+_DEFAULT_HORIZONS = DEFAULT_HORIZONS
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class EventStudy:
     """事件研究结果。
 

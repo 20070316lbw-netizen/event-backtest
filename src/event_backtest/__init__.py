@@ -17,14 +17,16 @@ from event_backtest.benchmark import benchmark_nav
 from event_backtest.broker import Fill, Order, Portfolio, apply_fill, match_order
 from event_backtest.cli import main
 from event_backtest.config import ConfigError, MarketConfig, default_fees, load_config
-from event_backtest.engine import BacktestResult, Context, run
+from event_backtest.engine import BacktestResult, Context, ContextStrategy, run
 from event_backtest.evaluation import (
+    DEFAULT_HORIZONS,
     EventStudy,
     bootstrap_mean,
     mean_t_test,
     study_events,
     two_sided_t_p,
 )
+from event_backtest.facade import UNSET, EventBackTest
 from event_backtest.factor import FactorSpec, compute, load_specs, market_frames
 from event_backtest.fees import ZERO_FEE, FeeSchedule
 from event_backtest.figure import (
@@ -61,6 +63,7 @@ from event_backtest.report import (
     print_result,
     print_walk_forward,
 )
+from event_backtest.results import Run, jsonable, save_run
 from event_backtest.rules import (
     CNMarketRules,
     MarketRules,
@@ -90,6 +93,7 @@ from event_backtest.strategy import (
     load_strategy,
     make_strategy,
     parse_strategy,
+    resolve_strategy,
 )
 from event_backtest.sweep import SweepResult, expand_grid, make_grid_select, search
 from event_backtest.walkforward import (
@@ -105,14 +109,18 @@ from event_backtest.walkforward import (
 )
 
 __all__ = [
+    "DEFAULT_HORIZONS",
     "STRATEGIES",
+    "UNSET",
     "ZERO_FEE",
     "BacktestResult",
     "BuyHold",
     "CNMarketRules",
     "ConfigError",
     "Context",
+    "ContextStrategy",
     "DeclarativeStrategy",
+    "EventBackTest",
     "EventStudy",
     "ExitRules",
     "FactorRef",
@@ -129,6 +137,7 @@ __all__ = [
     "NoSlippage",
     "Order",
     "Portfolio",
+    "Run",
     "SignalSpec",
     "Sizing",
     "SlippageModel",
@@ -157,6 +166,7 @@ __all__ = [
     "expand_grid",
     "fold_ranges",
     "generate_events",
+    "jsonable",
     "limit_prices",
     "load_config",
     "load_market",
@@ -183,8 +193,10 @@ __all__ = [
     "print_result",
     "print_walk_forward",
     "reject_reasons",
+    "resolve_strategy",
     "run",
     "run_walk_forward",
+    "save_run",
     "search",
     "slice_dates",
     "slice_market",
