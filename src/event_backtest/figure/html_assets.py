@@ -227,17 +227,23 @@ function renderChart(host, spec) {
     const series = shown();
     const labels = spec.labels;
     const n = labels.length;
-    const margin = { top: 14, right: 16, bottom: 26, left: 64 };
-    const innerW = width - margin.left - margin.right;
-    const innerH = height - margin.top - margin.bottom;
 
-    const svg = svgEl("svg", { width: width, height: height, viewBox: "0 0 " + width + " " + height });
-    svgBox.appendChild(svg);
+    function makeSvg() {
+      const node = svgEl("svg", { width: width, height: height, viewBox: "0 0 " + width + " " + height });
+      svgBox.appendChild(node);
+      return node;
+    }
+
+    function note(text) {
+      const margin = { top: 14, left: 64 };
+      const node = makeSvg();
+      const label = svgEl("text", { x: margin.left, y: margin.top + (height - 40) / 2, class: "empty-text" });
+      label.textContent = text;
+      node.appendChild(label);
+    }
 
     if (n < 2 || series.length === 0) {
-      const note = svgEl("text", { x: margin.left, y: margin.top + innerH / 2, class: "empty-text" });
-      note.textContent = n < 2 ? "数据不足, 画不了图" : "所有序列都被隐藏了";
-      svg.appendChild(note);
+      note(n < 2 ? "数据不足, 画不了图" : "所有序列都被隐藏了");
       return;
     }
 
@@ -259,9 +265,7 @@ function renderChart(host, spec) {
       }
     });
     if (!isFinite(min) || !isFinite(max)) {
-      const note = svgEl("text", { x: margin.left, y: margin.top + innerH / 2, class: "empty-text" });
-      note.textContent = "这段区间没有数据";
-      svg.appendChild(note);
+      note("这段区间没有数据");
       return;
     }
     if (spec.zeroBase) { min = Math.min(min, 0); max = Math.max(max, 0); }
@@ -269,6 +273,29 @@ function renderChart(host, spec) {
     const pad = (max - min) * 0.08 || Math.abs(max) * 0.08 || 1;
     min -= pad;
     if (!spec.forceZeroMax) max += pad;
+
+    /* 刻度先算出来: 一是去重(0.5 / 1 都显示成 1 就只留一个), 二是按最宽的刻度文本
+       定左边距 —— 净值到百万级时 64px 会把 "1,100,000.00" 截掉一半。 */
+    const axisKind = spec.axisKind || spec.valueKind;
+    const ticks = [];
+    const seenTicks = {};
+    niceTicks(min, max, 5).forEach(function (tick) {
+      if (tick < min - 1e-9 || tick > max + 1e-9) return;
+      // 计数轴的刻度取整(顺便把 -0 变成 0)
+      const shown = axisKind === "int" ? Math.round(tick) + 0 : tick;
+      const text = fmtValue(shown, axisKind);
+      if (seenTicks[text]) return;
+      seenTicks[text] = true;
+      ticks.push({ tick: tick, text: text });
+    });
+    const widest = ticks.reduce(function (acc, item) { return Math.max(acc, item.text.length); }, 4);
+    const margin = {
+      top: 14, right: 16, bottom: 26,
+      left: Math.min(132, Math.max(48, Math.round(widest * 6.9) + 14))
+    };
+    const innerW = width - margin.left - margin.right;
+    const innerH = height - margin.top - margin.bottom;
+    const svg = makeSvg();
 
     function xOf(i) {
       if (times) {
@@ -281,22 +308,14 @@ function renderChart(host, spec) {
       return margin.top + (max - v) / (max - min) * innerH;
     }
 
-    /* 网格 + y 轴(格式化后重名的刻度只画一次, 免得 0.5 / 1 都显示成 1) */
+    /* 网格 + y 轴 */
     const grid = svgEl("g", { class: "grid" });
     const axis = svgEl("g", { class: "axis" });
-    const seenTicks = {};
-    const axisKind = spec.axisKind || spec.valueKind;
-    niceTicks(min, max, 5).forEach(function (tick) {
-      if (tick < min - 1e-9 || tick > max + 1e-9) return;
-      // 计数轴的刻度取整(顺便把 -0 变成 0), 文本再按格式化结果去重
-      const shown = axisKind === "int" ? Math.round(tick) + 0 : tick;
-      const text = fmtValue(shown, axisKind);
-      if (seenTicks[text]) return;
-      seenTicks[text] = true;
-      const y = yOf(tick);
+    ticks.forEach(function (item) {
+      const y = yOf(item.tick);
       grid.appendChild(svgEl("line", { x1: margin.left, y1: y, x2: margin.left + innerW, y2: y, class: "grid-line" }));
       const label = svgEl("text", { x: margin.left - 8, y: y + 4, "text-anchor": "end" });
-      label.textContent = text;
+      label.textContent = item.text;
       axis.appendChild(label);
     });
     svg.appendChild(grid);
