@@ -24,9 +24,9 @@ from event_backtest.figure import plot_walk_forward, plot_walk_forward_html
 from event_backtest.strategy import STRATEGY_DIR
 
 # ---------------------------------------------------------------- 参数区(改这里)
-MARKET = "cn"
-DB = "/Users/liu/quant/minievent/data/ashare.db"   # None = 用配置文件里的
-FREQ = "30"                                       # None = 用配置文件里的
+MARKET = "cn_stock"                                # 10 年股票池(数据: scripts/update_ashare.py)
+DB = None                                         # None = 用配置文件里的 data.db_path
+FREQ = None                                       # None = 用配置文件里的(日线)
 STRATEGY = "volume_breakout"
 START = None                                      # 喂给 cfg.load 的区间; None 不限
 END = None
