@@ -54,6 +54,46 @@ _COUNT = {"bars", "days", "trades", "max_drawdown_days", "avg_bars",
           "orders", "filled_orders", "rejected_orders", "cancelled_orders"}
 
 
+def result_values(result: BacktestResult, *, market: str = "us",
+                  benchmark: str | None = None) -> dict[str, object]:
+    """回测结果 -> 报告要用的全部字段(组合指标 + 交易统计 + 执行情况)。
+
+    Args:
+        result: engine.run 的输出。
+        market: "cn" / "us", 决定年化交易日数(A 股 242, 美股 252)。
+        benchmark: 基准证券代码; 给了且该证券在本次行情里, 就多算基准 / 超额 / Beta。
+
+    Returns:
+        {字段名: 值}; 与 result_sections 同源。
+    """
+    summary = summarize(result.nav, market=market,
+                        benchmark_nav=benchmark_nav(result, benchmark))
+    stats = trade_stats(trades(result.fills))
+    execution = execution_stats(result.orders, result.fills, result.nav)
+    return {**summary.to_dict(), **stats.to_dict(), **execution.to_dict()}
+
+
+def result_sections(result: BacktestResult, *, market: str = "us",
+                    benchmark: str | None = None) -> list[tuple[str, list[tuple[str, str]]]]:
+    """回测结果 -> [(分组标题, [(中文标签, 格式化后的值)])]。
+
+    终端(print_result)与 HTML 报告(figure.html)共用这一份, 保证两边口径一致;
+    某组一个字段都取不到时该组是空列表。
+
+    Args:
+        result: engine.run 的输出。
+        market: "cn" / "us", 年化口径。
+        benchmark: 基准证券代码。
+
+    Returns:
+        [(标题, [(标签, 值文本)])], 顺序同报告里的分组顺序。
+    """
+    values = result_values(result, market=market, benchmark=benchmark)
+    return [(title, [(label, format_value(key, values[key])) for key, label in items
+                     if key in values and values[key] is not None])
+            for title, items in _SECTIONS]
+
+
 def print_result(result: BacktestResult, *, market: str = "us", benchmark: str | None = None,
                  console: Console | None = None) -> None:
     """把单个回测结果打印成分组中文表格。
@@ -64,17 +104,9 @@ def print_result(result: BacktestResult, *, market: str = "us", benchmark: str |
         benchmark: 基准证券代码; 给了且该证券在本次行情里, 就多打印基准 / 超额 / Beta。
         console: 复用一个已有 rich Console(比如配置过主题), 默认新建。
     """
-    summary = summarize(result.nav, market=market,
-                        benchmark_nav=benchmark_nav(result, benchmark))
-    stats = trade_stats(trades(result.fills))
-    execution = execution_stats(result.orders, result.fills, result.nav)
-    values: dict[str, object] = {**summary.to_dict(), **stats.to_dict(),
-                                 **execution.to_dict()}
-
     console = console or Console()
-    for i, (title, items) in enumerate(_SECTIONS):
-        rows = [(label, _format(key, values[key])) for key, label in items
-                if key in values and values[key] is not None]
+    for i, (title, rows) in enumerate(result_sections(result, market=market,
+                                                      benchmark=benchmark)):
         if not rows:
             continue
         if i:
@@ -136,7 +168,7 @@ def print_comparison(table: pd.DataFrame, *, console: Console | None = None,
     for _, label in columns:
         rich_table.add_column(label, justify="right")
     for name, row in table.iterrows():
-        rich_table.add_row(str(name), *[_format(key, row[key]) for key, _ in columns])
+        rich_table.add_row(str(name), *[format_value(key, row[key]) for key, _ in columns])
     console.print(rich_table)
 
 
@@ -158,11 +190,11 @@ def print_walk_forward(result: object, *, console: Console | None = None,
         table.add_column(column, justify=justify)
     for _, row in fold_table.iterrows():
         table.add_row(str(row["fold"]), str(row["train"]), str(row["test"]),
-                      str(row["bars"]), _format("test_return", row["test_return"]),
+                      str(row["bars"]), format_value("test_return", row["test_return"]),
                       str(row["trades"]))
     console.print(table)
 
-    # 拼接后的样本外净值: 只挑关键指标, 复用 _format 的格式规则
+    # 拼接后的样本外净值: 只挑关键指标, 复用 format_value 的格式规则
     summary = summarize(result.oos_nav, market=result.market_name)
     console.print()
     oos = Table(title=f"{result.name} · 拼接样本外", show_header=False, box=None,
@@ -172,12 +204,20 @@ def print_walk_forward(result: object, *, console: Console | None = None,
     for key, label in (("total_return", "总收益率"), ("annual_return", "年化收益率"),
                        ("annual_vol", "年化波动率"), ("sharpe", "Sharpe"),
                        ("max_drawdown", "最大回撤")):
-        oos.add_row(label, _format(key, summary[key]))
+        oos.add_row(label, format_value(key, summary[key]))
     console.print(oos)
 
 
-def _format(key: str, value: object) -> str:
-    """按字段类型格式化: 比例 -> 百分数, 金额 -> 千分位, 计数 -> 整数, 日期 -> 年月日。"""
+def format_value(key: str, value: object) -> str:
+    """按字段类型格式化: 比例 -> 百分数, 金额 -> 千分位, 计数 -> 整数, 日期 -> 年月日。
+
+    Args:
+        key: 字段名(决定格式规则)。
+        value: 字段值。
+
+    Returns:
+        终端 / HTML 表格里显示的文本。
+    """
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-"
     if isinstance(value, (pd.Timestamp, dt.datetime)):

@@ -21,7 +21,15 @@ from event_backtest.engine import BacktestResult, Context, run
 from event_backtest.evaluation import EventStudy, study_events
 from event_backtest.factor import FactorSpec, compute, load_specs, market_frames
 from event_backtest.fees import ZERO_FEE, FeeSchedule
-from event_backtest.figure import plot_comparison, plot_tearsheet, plot_walk_forward
+from event_backtest.figure import (
+    HtmlReport,
+    plot_comparison,
+    plot_comparison_html,
+    plot_tearsheet,
+    plot_tearsheet_html,
+    plot_walk_forward,
+    plot_walk_forward_html,
+)
 from event_backtest.market import (
     MarketData,
     build_cn_market,
@@ -108,6 +116,7 @@ __all__ = [
     "FixedSlippage",
     "FoldRange",
     "FoldResult",
+    "HtmlReport",
     "MarketConfig",
     "MarketData",
     "MarketRules",
@@ -157,8 +166,11 @@ __all__ = [
     "performance",
     "periods_per_year",
     "plot_comparison",
+    "plot_comparison_html",
     "plot_tearsheet",
+    "plot_tearsheet_html",
     "plot_walk_forward",
+    "plot_walk_forward_html",
     "print_comparison",
     "print_result",
     "print_walk_forward",

@@ -23,6 +23,7 @@ from event_backtest.config import SETTING_DIR, load_config
 from event_backtest.engine import run as run_backtest
 from event_backtest.evaluation import EventStudy, study_events
 from event_backtest.factor import load_specs
+from event_backtest.figure import plot_tearsheet_html
 from event_backtest.market import MarketData
 from event_backtest.metrics import execution_stats, summarize, trade_stats, trades
 from event_backtest.report import print_result
@@ -67,6 +68,8 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--db", default=None, help="覆盖配置里的数据库路径")
     run_p.add_argument("--output", default=None, help="结果输出目录(parquet / csv)")
     run_p.add_argument("--event-study", action="store_true", help="对声明式策略做事件研究")
+    run_p.add_argument("--html", action="store_true",
+                       help="额外写一份自包含的交互式 tearsheet.html(需配合 --output)")
     run_p.add_argument("--fast", type=int, default=5, help="sma_cross 快线窗口")
     run_p.add_argument("--slow", type=int, default=20, help="sma_cross 慢线窗口")
 
@@ -95,7 +98,11 @@ def _run(args: argparse.Namespace) -> int:
 
     study = _maybe_event_study(args, spec, market)
     if args.output:
-        _write(args.output, result, summary, stats, order_trades, study)
+        _write(args.output, result, summary, stats, order_trades, study,
+               market=cfg.market, benchmark=cfg.benchmark,
+               title=f"{cfg.market} · {args.strategy}", html=args.html)
+    elif args.html:
+        logger.warning("--html 要写到目录里, 需要同时给 --output; 已跳过")
     return 0
 
 
@@ -140,10 +147,13 @@ def _maybe_event_study(args: argparse.Namespace, spec: StrategySpec | None,
 
 
 def _write(output: str, result: object, summary: object, stats: object,
-           order_trades: object, study: EventStudy | None) -> None:
+           order_trades: object, study: EventStudy | None, *, market: str = "us",
+           benchmark: str | None = None, title: str | None = None,
+           html: bool = False) -> None:
     """写回测结果: nav / fills / trades / orders 用 parquet, 指标用 csv。
 
-    委托明细(orders)含被拒 / 期末未成交的订单与原因; 有事件研究再写两张。
+    委托明细(orders)含被拒 / 期末未成交的订单与原因; 有事件研究再写两张;
+    html=True 再写一份自包含的交互式 tearsheet.html。
     """
     out = Path(output)
     out.mkdir(parents=True, exist_ok=True)
@@ -158,6 +168,10 @@ def _write(output: str, result: object, summary: object, stats: object,
     if study is not None:
         study.paths.to_parquet(out / "event_paths.parquet")
         study.summary.to_csv(out / "event_summary.csv", index=False)
+    if html:
+        page = plot_tearsheet_html(result, market=market, benchmark=benchmark, title=title)
+        logger.info(f"HTML tearsheet: {page.save(out / 'tearsheet.html')} "
+                    f"({len(page) / 1024:.0f} KB)")
     logger.info(f"结果写入 {out.resolve()}")
 
 

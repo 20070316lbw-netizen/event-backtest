@@ -38,11 +38,15 @@ event-backtest run --config us --strategy volume_breakout \
 # A 股 10 年日线(股票池; 数据先用 scripts/update_ashare.py 抓进 data/ashare.db)
 event-backtest run --config cn_stock --strategy volume_breakout \
   --start 2016-10-10 --end 2026-09-30
+
+# 加 --html: 除了 parquet / csv, 再写一份自包含交互式 tearsheet.html
+event-backtest run --config us --strategy volume_breakout --html \
+  --start 2024-01-01 --end 2024-12-31 --output outputs/us_demo
 ```
 
 输出目录含 `nav.parquet` / `fills.parquet` / `orders.parquet` / `trades.parquet` /
 `performance.csv` / `trade_stats.csv` / `execution.csv`; 加 `--event-study` 时再写
-`event_paths.parquet` / `event_summary.csv`。
+`event_paths.parquet` / `event_summary.csv`; 加 `--html` 再写 `tearsheet.html`。
 
 `orders.parquet` 是**委托明细**: 每一单都有 `status`(open / filled / rejected /
 cancelled)、没成交时的 `reason`(如"涨停买不进"/"现金不足"/"回测结束未成交")与
@@ -161,17 +165,34 @@ src/event_backtest/
   evaluation/     事件研究
   metrics.py      组合与交易统计
   report.py       rich 中文表(单场景 / 对比 / walk-forward)
-  figure/         tearsheet / 对比图 / walk-forward 图
+  figure/         PNG(matplotlib) + 自包含交互式 HTML(零依赖原生 JS/SVG)
   benchmark.py    基准买入持有净值
   config.py       市场配置
   setting/        cn.yaml / us.yaml
   cli.py          命令行
 ```
 
+## 交互式 HTML 报告
+
+`figure/plot_tearsheet_html` / `plot_comparison_html` / `plot_walk_forward_html`
+返回 `HtmlReport`, `.save(path)` 落成**单个自包含 HTML**: 数据内联 JSON, 样式与脚本
+内联, 不引用 CDN, 断网 / 直接发文件都能打开。
+
+- 内容: KPI 卡 + 净值(带基准线) + 回撤 + 月度收益 + 回合收益分布 + 指标分组表 +
+  回合交易表 + 委托明细 / 拒单原因(tearsheet); 多场景净值叠加 + 可排序指标表(对比);
+  样本外净值 + 各折收益 + 折明细(walk-forward)。
+- 交互: 十字光标 + tooltip、图例点击开关、区间缩放(1月/3月/6月/1年/3年/5年/10年)、
+  表格点表头排序、深浅色切换(默认跟随系统)。
+- 口径与终端一致: 指标分组复用 `report.result_sections`, 执行 / 拒单复用 `metrics`,
+  所以 HTML、终端表和 parquet 三边对得上。
+
+```bash
+# 脚本里三套都出: scripts/run_backtest.py -> comparison.html + 每个场景一份
+#                  scripts/run_walk_forward.py -> oos.html
+```
+
 ## 待办
 
-- **图表输出 HTML**: tearsheet / 对比图 / walk-forward 图目前是静态 PNG, 以后可以做可
-  交互的 HTML。
 - **事件研究的显著性**: 现在只出描述性统计, 没有 p 值 / bootstrap 区间(见
   `evaluation/events.py`)。
 - **扫参的表达力**: `sweep.set_path` 只能改**已存在**的字段(缺 `sizing` 段时扫

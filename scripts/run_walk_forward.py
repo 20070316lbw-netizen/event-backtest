@@ -20,7 +20,7 @@ from event_backtest import (
     print_walk_forward,
     run_walk_forward,
 )
-from event_backtest.figure import plot_walk_forward
+from event_backtest.figure import plot_walk_forward, plot_walk_forward_html
 from event_backtest.strategy import STRATEGY_DIR
 
 # ---------------------------------------------------------------- 参数区(改这里)
@@ -68,7 +68,8 @@ def main() -> None:
     result.fold_table().to_csv(out / "fold_table.csv", index=False)
     result.oos_nav.rename("nav").to_frame().to_parquet(out / "oos_nav.parquet")
     plot_walk_forward(result).savefig(out / "oos.png", dpi=120)
-    print(f"\n结果写入: {out}")
+    plot_walk_forward_html(result).save(out / "oos.html")
+    print(f"\n结果写入(含 oos.html): {out}")
 
 
 if __name__ == "__main__":

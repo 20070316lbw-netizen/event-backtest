@@ -19,7 +19,12 @@ from event_backtest import (
     load_config,
     load_strategy,
 )
-from event_backtest.figure import plot_comparison, plot_tearsheet
+from event_backtest.figure import (
+    plot_comparison,
+    plot_comparison_html,
+    plot_tearsheet,
+    plot_tearsheet_html,
+)
 from event_backtest.report import compare_results, print_comparison, print_result
 
 # ---------------------------------------------------------------- 参数区(改这里)
@@ -78,7 +83,15 @@ def main() -> None:
     for name, result in results.items():
         plot_tearsheet(result, market=base.market, benchmark=base.benchmark,
                        title=name).savefig(out / f"{name}.png", dpi=120)
-    print(f"\n图已保存: {out}")
+
+    # 同一份结果再出一套自包含 HTML(单文件, 可交互, 断网也能看)
+    plot_comparison_html(results, market=base.market,
+                         benchmark=base.benchmark).save(out / "comparison.html")
+    for name, result in results.items():
+        safe = name.replace("/", "_")
+        plot_tearsheet_html(result, market=base.market, benchmark=base.benchmark,
+                            title=name).save(out / f"{safe}.html")
+    print(f"\n图已保存(PNG + HTML): {out}")
 
 
 if __name__ == "__main__":
