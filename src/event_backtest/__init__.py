@@ -18,7 +18,13 @@ from event_backtest.broker import Fill, Order, Portfolio, apply_fill, match_orde
 from event_backtest.cli import main
 from event_backtest.config import ConfigError, MarketConfig, default_fees, load_config
 from event_backtest.engine import BacktestResult, Context, run
-from event_backtest.evaluation import EventStudy, study_events
+from event_backtest.evaluation import (
+    EventStudy,
+    bootstrap_mean,
+    mean_t_test,
+    study_events,
+    two_sided_t_p,
+)
 from event_backtest.factor import FactorSpec, compute, load_specs, market_frames
 from event_backtest.fees import ZERO_FEE, FeeSchedule
 from event_backtest.figure import (
@@ -137,6 +143,7 @@ __all__ = [
     "WalkForwardResult",
     "apply_fill",
     "benchmark_nav",
+    "bootstrap_mean",
     "build_cn_market",
     "build_us_market",
     "buy_and_hold_nav",
@@ -161,6 +168,7 @@ __all__ = [
     "make_strategy",
     "market_frames",
     "match_order",
+    "mean_t_test",
     "parse_signal",
     "parse_strategy",
     "performance",
@@ -184,4 +192,5 @@ __all__ = [
     "summarize",
     "trade_stats",
     "trades",
+    "two_sided_t_p",
 ]

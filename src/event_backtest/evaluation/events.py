@@ -4,9 +4,21 @@
     - 第 k 根累计收益 = adj_close[t+k] / adj_close[t] - 1, 起点是信号 bar 收盘;
     - 基线 = 同一证券、同一"结束时刻"(time-of-day)的全部有效窗口均值, 含事件本身;
       这是描述性的无条件基准, 不代表样本外超额;
-    - 每个 horizon 输出事件数、有效样本数、均值、中位数、胜率、基线与超额。
+    - 每个 horizon 输出事件数、有效样本数、均值、中位数、胜率、基线与超额;
+    - 显著性: 每个 horizon 单独做单样本 t 检验(零假设"均值 = 0"), 并给 bootstrap
+      百分位区间与零假设下的重抽 p 值。
 
-只做描述性统计, 不提供 p 值 / bootstrap 区间(那是 minievent 的完整版; 这里是轻量版)。
+怎么检验(默认口径, 见 tests 表的列):
+    - 检验对象默认是**超额收益**(事件收益 - 同时段无条件基线), 问的是"信号相对
+      同时段基准有没有增量"; test_on="ret" 则检验原始收益(多半只是在检验市场漂移)。
+    - **按交易日聚类**: 同一天 (尤其同一根 bar) 触发多个事件时它们并不独立, 直接对
+      事件做 t 检验会高估显著性。默认先把同一天的事件压成一个日均值, 再对日均值做
+      单样本 t 检验; cluster="none" 才是事件级 iid 检验。
+    - bootstrap 对日均值有放回重抽: 区间取重抽均值的百分位, p 值把样本平移到均值 0
+      下再重抽。
+    - 每个 horizon 各检各的, **没有做多重比较校正**: 16 个 horizon 一起看时, 单看某
+      一行"显著"要打个折扣; 要更严格自己按 horizon 数做 Bonferroni / BH。
+    - 有效样本太少(聚类后不足 2 个, 或标准差为 0)时统计量是 NaN, 不硬算。
 """
 from __future__ import annotations
 
@@ -15,9 +27,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from event_backtest.evaluation.stats import bootstrap_mean, mean_t_test, stars
 from event_backtest.market import MarketData
 
 __all__ = ["EventStudy", "study_events"]
+
+# tests 表的列
+_TEST_COLUMNS = ["horizon", "n", "n_obs", "n_days", "mean", "t", "p",
+                 "ci_low", "ci_high", "p_boot", "stars"]
 
 # 默认观察窗口: 信号后 1..16 根 bar(30 分钟线下正好两天)
 _DEFAULT_HORIZONS = tuple(range(1, 17))
@@ -33,27 +50,67 @@ class EventStudy:
             [strategy, event_id, ticker, bar, ts, horizon, ret, baseline_ret, excess_ret]。
         summary: 每个 horizon 一行的汇总, 列
             [horizon, n_events, n, mean_ret, median_ret, win_rate, baseline, excess]。
+        tests: 每个 horizon 一行的显著性检验, 列
+            [horizon, n, n_obs, n_days, mean, t, p, ci_low, ci_high, p_boot, stars]。
+            n 是有效事件窗口数, n_obs 是实际进入检验的观测数(按日聚类时 = 天数),
+            n_days 是涉及的不同交易日数; p 来自 t 检验, p_boot 来自 bootstrap。
     """
 
     events: pd.DataFrame
     paths: pd.DataFrame
     summary: pd.DataFrame
+    tests: pd.DataFrame
+
+    def tests_table(self) -> pd.DataFrame:
+        """tests 的展示版: 均值 / 区间转百分数, t 与 p 保留 4 位小数。
+
+        Returns:
+            DataFrame, 列同 tests, 但数值都格式化成了字符串; 非有限的显示为 "-"。
+        """
+        if self.tests.empty:
+            return self.tests.copy()
+        out = self.tests.copy()
+        for column in ("mean", "ci_low", "ci_high"):
+            out[column] = out[column].map(_pct)
+        for column in ("t", "p", "p_boot"):
+            out[column] = out[column].map(_num4)
+        return out
 
 
 def study_events(market: MarketData, events: pd.DataFrame, *,
                  horizons: tuple[int, ...] = _DEFAULT_HORIZONS,
-                 strategy_name: str = "") -> EventStudy:
-    """对事件表做事件后收益研究。
+                 strategy_name: str = "",
+                 test_on: str = "excess",
+                 cluster: str = "day",
+                 bootstrap: int = 1000,
+                 alpha: float = 0.05,
+                 seed: int = 0) -> EventStudy:
+    """对事件表做事件后收益研究, 并给出显著性检验与 bootstrap 区间。
 
     Args:
         market: 对齐后的行情(用后复权收盘价算收益)。
         events: 事件表, 至少含 [event_id, bar, ts, ticker]。
         horizons: 观察窗口(bar 数), 默认 1..16。
         strategy_name: 写进结果第一列, 便于多策略拼接。
+        test_on: 检验对象, "excess"(默认, 超额收益)或 "ret"(原始收益)。
+        cluster: "day"(默认)按交易日聚类, 同一天多个事件先压成日均值再检验;
+            "none" 用事件级 iid 检验(同日多事件时会高估显著性)。
+        bootstrap: bootstrap 重抽次数; 0 表示不算(区间与 p_boot 为 NaN)。
+        alpha: 置信水平, 区间是 1 - alpha 的百分位区间。
+        seed: bootstrap 随机种子, 固定它结果可复现。
 
     Returns:
-        EventStudy; 事件为空时返回空 paths 与带列名的空 summary。
+        EventStudy; 事件为空时返回空 paths 与带列名的空 summary / tests。
+
+    Raises:
+        ValueError: test_on / cluster 取值不对, 或 alpha 不在 (0, 1) 内。
     """
+    if test_on not in ("excess", "ret"):
+        raise ValueError(f"test_on 只能是 'excess' / 'ret', 收到 {test_on!r}")
+    if cluster not in ("day", "none"):
+        raise ValueError(f"cluster 只能是 'day' / 'none', 收到 {cluster!r}")
+    if not 0.0 < alpha < 1.0:
+        raise ValueError(f"alpha 要在 (0, 1) 内, 收到 {alpha!r}")
     horizons = tuple(int(h) for h in horizons)
     adj = market.adj_close
     total = len(market.ts)
@@ -86,7 +143,46 @@ def study_events(market: MarketData, events: pd.DataFrame, *,
 
     paths = pd.DataFrame(rows, columns=["strategy", "event_id", "ticker", "bar", "ts",
                                         "horizon", "ret", "baseline_ret", "excess_ret"])
-    return EventStudy(events=events, paths=paths, summary=_summary(paths))
+    tests = _tests(paths, test_on=test_on, cluster=cluster, n_boot=bootstrap,
+                   alpha=alpha, seed=seed)
+    return EventStudy(events=events, paths=paths, summary=_summary(paths), tests=tests)
+
+
+def _tests(paths: pd.DataFrame, *, test_on: str, cluster: str, n_boot: int,
+           alpha: float, seed: int) -> pd.DataFrame:
+    """按 horizon 做显著性检验: 单样本 t 检验 + bootstrap 区间。
+
+    按日聚类时先把同一天的多个事件压成日均值, 再对日均值检验(见模块 docstring)。
+    """
+    if paths.empty:
+        return pd.DataFrame(columns=_TEST_COLUMNS)
+    column = "ret" if test_on == "ret" else "excess_ret"
+    rows: list[dict[str, object]] = []
+    for horizon, group in paths.groupby("horizon", sort=True):
+        valid = group.dropna(subset=[column])
+        values = valid[column].to_numpy(dtype=float)
+        days = pd.DatetimeIndex(valid["ts"]).normalize()
+        if cluster == "day" and len(days):
+            observations = pd.Series(values, index=days).groupby(level=0).mean().to_numpy()
+        else:
+            observations = values
+        mean, t, p, n_obs = mean_t_test(observations)
+        ci_low, ci_high, p_boot = bootstrap_mean(observations, n_boot=n_boot,
+                                                 alpha=alpha, seed=seed)
+        rows.append({
+            "horizon": int(horizon),
+            "n": len(values),
+            "n_obs": n_obs,
+            "n_days": len(days.unique()),
+            "mean": mean,
+            "t": t,
+            "p": p,
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+            "p_boot": p_boot,
+            "stars": stars(p),
+        })
+    return pd.DataFrame(rows, columns=_TEST_COLUMNS)
 
 
 def _baseline(adj: np.ndarray, ts: np.ndarray,
@@ -149,3 +245,13 @@ def _win_rate(series: pd.Series) -> float:
     """收益率里大于 0 的比例; 全为 NaN 时返回 NaN。"""
     values = series.dropna()
     return float((values > 0).mean()) if len(values) else np.nan
+
+
+def _pct(value: float) -> str:
+    """比例 -> 百分数文本; 非有限给 "-"。"""
+    return f"{value:.2%}" if np.isfinite(value) else "-"
+
+
+def _num4(value: float) -> str:
+    """统计量 -> 4 位小数文本; 非有限给 "-"。"""
+    return f"{value:.4f}" if np.isfinite(value) else "-"

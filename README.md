@@ -46,7 +46,8 @@ event-backtest run --config us --strategy volume_breakout --html \
 
 输出目录含 `nav.parquet` / `fills.parquet` / `orders.parquet` / `trades.parquet` /
 `performance.csv` / `trade_stats.csv` / `execution.csv`; 加 `--event-study` 时再写
-`event_paths.parquet` / `event_summary.csv`; 加 `--html` 再写 `tearsheet.html`。
+`event_paths.parquet` / `event_summary.csv` / `event_tests.csv`; 加 `--html` 再写
+`tearsheet.html`。
 
 `orders.parquet` 是**委托明细**: 每一单都有 `status`(open / filled / rejected /
 cancelled)、没成交时的 `reason`(如"涨停买不进"/"现金不足"/"回测结束未成交")与
@@ -65,8 +66,27 @@ market = cfg.load(start="2026-01-05", end="2026-09-24", freq="30")
 spec = load_strategy("volume_breakout")
 result = cfg.run(DeclarativeStrategy(spec), start="2026-01-05", end="2026-09-24", freq="30")
 study = study_events(market, spec.events(spec.compute(market), market), strategy_name=spec.name)
-study.summary
+study.summary        # 每个 horizon 的均值 / 基线 / 超额 / 胜率
+study.tests_table()  # 显著性: 均值 / t / p / bootstrap 区间 / 星号
 ```
+
+## 事件研究的显著性
+
+`--event-study` 除了描述性汇总, 还会打印一张检验表, 并存
+`event_tests.csv`(列: `horizon, n, n_obs, n_days, mean, t, p, ci_low, ci_high,
+p_boot, stars`)。口径:
+
+- **检验对象**默认是**超额收益**(事件收益 - 同时段无条件基线), 问的是"信号相对同时段
+  基准有没有增量"; `test_on="ret"` 则检验原始收益(多半只是在检验市场漂移)。
+- **按交易日聚类**(默认): 同一天、尤其同一根 bar 触发的多个事件并不独立, 直接对事件
+  做 t 检验会高估显著性。先把同一天的事件压成一个日均值, 再对日均值做单样本 t 检验;
+  `cluster="none"` 才是事件级 iid 检验(仅作对照)。
+- **bootstrap**: 对日均值有放回重抽, 区间取重抽均值的百分位; p 值把样本平移到均值 0
+  下再重抽(零假设下的重抽检验)。用 `seed` 固定随机性, 默认 1000 次。
+- **样本太少不算**: 聚类后不足 2 个观测、或标准差为 0 时, t / p / 区间都是 NaN。
+- **没有多重比较校正**: 每个 horizon 各检各的, 16 个 horizon 一起看时单看某一行的
+  "显著"要打折扣; 要更严格自己按 horizon 数做 Bonferroni / BH。
+- 统计量用 `scipy.stats`(t 检验); bootstrap 用 numpy 自己实现, 便于固定种子复现。
 
 ## 市场配置
 
@@ -193,8 +213,6 @@ src/event_backtest/
 
 ## 待办
 
-- **事件研究的显著性**: 现在只出描述性统计, 没有 p 值 / bootstrap 区间(见
-  `evaluation/events.py`)。
 - **扫参的表达力**: `sweep.set_path` 只能改**已存在**的字段(缺 `sizing` 段时扫
   `sizing.percent` 会 KeyError), 且可选指标只有 `evaluate_spec` 里那 5 个。
 - **信号归因到成交**: `orders.tag` 能区分入场 / 出场规则, 但还没有把成交对回具体的
@@ -207,4 +225,5 @@ src/event_backtest/
 - A 股: T+1(新交易日首根 bar 解禁)、涨跌停(一字涨停买不进 / 一字跌停卖不出)、
   100 股整手、按 `sec_type` 的佣金 / 印花税 / 过户费。
 - 美股: T+0、无涨跌停、1 股整手。
-- 事件研究的基线是同时段无条件均值, 只作描述, 不代表样本外超额。
+- 事件研究的基线是同时段无条件均值, 只作描述; 显著性检验按交易日聚类, 不做多重比较
+  校正, 所以"显著"要结合 horizon 数量一起看。

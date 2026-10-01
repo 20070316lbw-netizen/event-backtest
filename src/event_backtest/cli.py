@@ -143,6 +143,11 @@ def _maybe_event_study(args: argparse.Namespace, spec: StrategySpec | None,
     study = study_events(market, events, strategy_name=spec.name)
     logger.info(f"事件研究: 事件={len(events)}")
     print(study.summary.to_string(index=False))
+    if not study.tests.empty:
+        print()
+        print("显著性检验(按交易日聚类):")
+        print(study.tests_table().to_string(index=False))
+        logger.info("p 值每个 horizon 单独检验, 未做多重比较校正; 星号 *** <0.01, ** <0.05, * <0.1")
     return study
 
 
@@ -168,6 +173,7 @@ def _write(output: str, result: object, summary: object, stats: object,
     if study is not None:
         study.paths.to_parquet(out / "event_paths.parquet")
         study.summary.to_csv(out / "event_summary.csv", index=False)
+        study.tests.to_csv(out / "event_tests.csv", index=False)
     if html:
         page = plot_tearsheet_html(result, market=market, benchmark=benchmark, title=title)
         logger.info(f"HTML tearsheet: {page.save(out / 'tearsheet.html')} "
