@@ -225,7 +225,8 @@ def match_order(order: Order, bar: int, market: MarketData, portfolio: Portfolio
     want = (order.open_amount if buy
             else min(-order.open_amount, int(portfolio.available[i])))
     # 清仓时允许零股, 其余按整手向下取整
-    qty = _round_qty(want, lot_size, allow_odd=not buy and want == int(portfolio.available[i]))
+    allow_odd = not buy and want == int(portfolio.available[i])
+    qty = _round_qty(want, lot_size, allow_odd=allow_odd)
     if qty <= 0:
         order.status, order.reason = REJECTED, "无可用持仓" if not buy else "数量不足一手"
         return None
@@ -234,7 +235,8 @@ def match_order(order: Order, bar: int, market: MarketData, portfolio: Portfolio
     if slippage is not None:
         price, cap = slippage.apply(price, is_buy=buy,
                                     bar_volume=float(market.volume[bar, i]), qty=qty)
-        qty = min(qty, cap)
+        # 成交量上限是任意整数(如 37), 对整手品种要再截一次, 否则 A 股会成交零股
+        qty = _round_qty(min(qty, cap), lot_size, allow_odd=allow_odd)
         if qty <= 0:
             order.status, order.reason = REJECTED, "成交量不足"
             return None

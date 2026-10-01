@@ -317,7 +317,10 @@ def _apply(operation: str, args: Mapping[str, Any]) -> np.ndarray:
     if operation == "rolling_corr":
         return _rolling_corr(np.asarray(args["left"], float),
                              np.asarray(args["right"], float), int(args["window"]))
-    return _cross_section_rank(np.asarray(args["input"], float))
+    if operation == "cross_section_rank":
+        return _cross_section_rank(np.asarray(args["input"], float))
+    # 登记了运算却没有执行分支时必须报错; 默默按截面排名算会给出错误结果
+    raise FactorError(f"运算 {operation!r} 没有实现")
 
 
 def _divide(numerator: Any, denominator: Any) -> np.ndarray:

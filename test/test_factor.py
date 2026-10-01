@@ -4,7 +4,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from event_backtest.factor import FactorError, compute, parse_factor
+from event_backtest.factor import FactorError, _apply, compute, parse_factor
+
+
+def test_unknown_operation_raises_instead_of_ranking():
+    """登记了运算却没有执行分支时必须报错, 不能默默按截面排名算。"""
+    with pytest.raises(FactorError, match="没有实现"):
+        _apply("nope", {})
 
 
 def _ratio_spec():
