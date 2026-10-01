@@ -5,7 +5,37 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from event_backtest.market import build_cn_market, build_us_market
+from event_backtest.market import _pivot_fields, build_cn_market, build_us_market
+
+
+def test_pivot_fields_matches_pandas_pivot():
+    """散点赋值版必须与 pandas.pivot + reindex 逐元素一致(含缺失 / 乱序 / 多余证券)。"""
+    frame = pd.DataFrame([
+        {"date": "2024-01-03", "ticker": "A", "close": 2.0, "volume": 20},
+        {"date": "2024-01-02", "ticker": "A", "close": 1.0, "volume": 10},
+        {"date": "2024-01-02", "ticker": "B", "close": 3.0, "volume": 30},
+        {"date": "2024-01-04", "ticker": "C", "close": 9.0, "volume": 90},
+    ])
+    # 真实调用方会先把时间列转成 datetime, 这里保持一致(否则 pandas 的 reindex 对不上)
+    frame["date"] = pd.to_datetime(frame["date"])
+    ts = pd.DatetimeIndex(["2024-01-02", "2024-01-03", "2024-01-05"])
+    cols = ("A", "B", "D")
+
+    got = _pivot_fields(frame, "date", ts, cols, ("close", "volume"))
+    for field in ("close", "volume"):
+        expected = (frame.pivot(index="date", columns="ticker", values=field)
+                    .reindex(index=ts, columns=list(cols)).to_numpy(dtype=float))
+        assert got[field].shape == (3, 3)
+        assert np.allclose(got[field], expected, equal_nan=True)
+
+
+def test_pivot_fields_rejects_duplicate_keys():
+    frame = pd.DataFrame([
+        {"date": "2024-01-02", "ticker": "A", "close": 1.0},
+        {"date": "2024-01-02", "ticker": "A", "close": 2.0},
+    ])
+    with pytest.raises(ValueError, match="重复"):
+        _pivot_fields(frame, "date", pd.DatetimeIndex(["2024-01-02"]), ("A",), ("close",))
 
 
 def _cn_frames():

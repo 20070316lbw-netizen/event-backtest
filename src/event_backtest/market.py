@@ -240,7 +240,9 @@ def build_cn_market(
     bars = bars[bars["ticker"].isin(cols)].copy()
     # 统一成 datetime, 否则字符串时间戳和下面的 DatetimeIndex 对不齐(整列变 NaN)
     bars["ts"] = pd.to_datetime(bars["ts"])
-    if missing := [t for t in cols if t not in set(bars["ticker"])]:
+    # set(...) 只建一次: 写在推导式里会为每只证券重建一遍(百万行时要几分钟)
+    present = set(bars["ticker"])
+    if missing := [t for t in cols if t not in present]:
         logger.warning(f"这些证券没有行情数据, 整列为 NaN: {missing}")
 
     # 1. 时间轴 = 所有证券 ts 的并集; days 用来把日频字段广播到每根 bar
@@ -356,7 +358,9 @@ def build_us_market(prices: pd.DataFrame, *, tickers: Sequence[str] | None = Non
     cols = tuple(dict.fromkeys(tickers)) if tickers is not None \
         else tuple(sorted(prices["ticker"].unique()))
     p = prices[prices["ticker"].isin(cols)].copy()
-    if missing := [t for t in cols if t not in set(p["ticker"])]:
+    # set(...) 只建一次: 写在推导式里会为每只证券重建一遍(全 S&P 500 要两分多钟)
+    present = set(p["ticker"])
+    if missing := [t for t in cols if t not in present]:
         logger.warning(f"这些证券没有行情数据, 整列为 NaN: {missing}")
     p["date"] = pd.to_datetime(p["date"])
 
@@ -392,23 +396,49 @@ def build_us_market(prices: pd.DataFrame, *, tickers: Sequence[str] | None = Non
 
 def _pivot_fields(df: pd.DataFrame, index: str, ts: pd.DatetimeIndex,
                   cols: tuple[str, ...], fields: Sequence[str]) -> dict[str, np.ndarray]:
-    """把长表按 [index, ticker] 透视成对齐的 (T, N) float 数组。
+    """把长表按 [index, ticker] 摆成对齐的 (T, N) float 数组。
+
+    实现用的是"先把每行定位到 (行号, 列号), 再散点赋值", 而不是
+    `df.pivot(...).reindex(...)`: 全 S&P 500 那种百万行长表下, pandas 的
+    pivot + reindex 要一分多钟, 散点赋值是 O(行数)。缺的 (时点, 证券) 留 NaN。
 
     Args:
         df: 长表。
         index: 时间列名(如 "ts" / "date")。
-        ts: 目标时间轴; 透视结果会 reindex 到它, 缺的时点补 NaN。
+        ts: 目标时间轴; 不在轴上的行会被丢掉, 轴上没有的时点补 NaN。
         cols: 目标证券顺序。
         fields: 要透视的列名。
 
     Returns:
         {列名: (T, N) float 数组}, 行列顺序分别是 ts / cols。
+
+    Raises:
+        ValueError: 长表里有重复的 (时点, 证券) —— 那是数据问题, 不该悄悄取最后一个。
     """
-    return {
-        field: df.pivot(index=index, columns="ticker", values=field)
-        .reindex(index=ts, columns=list(cols)).to_numpy(dtype=float)
-        for field in fields
-    }
+    if not fields:
+        return {}
+    empty = np.full((len(ts), len(cols)), np.nan)
+    if df.empty:
+        return dict.fromkeys(fields, empty.copy())
+
+    stamps = pd.DatetimeIndex(pd.to_datetime(df[index]))
+    rows = pd.DatetimeIndex(ts).get_indexer(stamps)
+    column_of = {ticker: position for position, ticker in enumerate(cols)}
+    mapped = df["ticker"].map(column_of)
+    keep = (rows >= 0) & mapped.notna().to_numpy()
+    rows, columns = rows[keep], mapped.to_numpy()[keep].astype(np.intp)
+
+    flat = rows * len(cols) + columns
+    if len(np.unique(flat)) != len(flat):
+        raise ValueError(f"长表里有重复的 ({index}, ticker), 透视不了; 请先去重")
+
+    values_by_field: dict[str, np.ndarray] = {}
+    for field in fields:
+        array = np.full((len(ts), len(cols)), np.nan)
+        array[rows, columns] = pd.to_numeric(df[field], errors="coerce").to_numpy(
+            dtype=float)[keep]
+        values_by_field[field] = array
+    return values_by_field
 
 
 def _str_or_none(value: object) -> str | None:
