@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 
 from event_backtest.broker import CANCELLED, FILLED, REJECTED
+from event_backtest.market import MarketData
 
 # 每年交易日: A 股 242, 美股 252
 _TRADING_DAYS = {"cn": 242, "us": 252}
@@ -159,20 +160,45 @@ def summarize(nav: pd.Series, *, market: str = "us",
     return pd.Series(out)
 
 
-# 回合交易的列
+# 回合交易的列; open=True 表示回测结束时还没平仓(用 marks 盯市估值)
 _TRADE_COLUMNS = ["ticker", "entry_ts", "exit_ts", "qty", "entry_px", "exit_px",
-                  "pnl", "ret", "fees", "bars"]
+                  "pnl", "ret", "fees", "bars", "open", "entry_event"]
+
+# 每只证券的持仓状态: 数量 / 成本 / 费用 / 已实现盈亏 / 建仓信息
+_EMPTY_STATE = {"qty": 0.0, "cost": 0.0, "fees": 0.0, "realized": 0.0, "entry_ts": None,
+                "entry_bar": 0, "entry_px": 0.0, "bought": 0.0, "entry_event": ""}
 
 
-def trades(fills: pd.DataFrame) -> pd.DataFrame:
+def last_marks(market: MarketData) -> pd.Series:
+    """每只证券最后一个有效收盘价(给未平仓头寸盯市用)。
+
+    Args:
+        market: 本次回测的行情。
+
+    Returns:
+        pd.Series, index 是证券代码; 整列都没有有效价的给 NaN。
+    """
+    out = np.full(len(market.tickers), np.nan)
+    for i in range(len(market.tickers)):
+        column = market.close[:, i]
+        valid = np.flatnonzero(np.isfinite(column))
+        if valid.size:
+            out[i] = float(column[valid[-1]])
+    return pd.Series(out, index=list(market.tickers))
+
+
+def trades(fills: pd.DataFrame, *, marks: pd.Series | None = None) -> pd.DataFrame:
     """成交流水 -> 回合交易(按证券加权平均成本)。
 
     对每只证券维护持仓数量、成本总额与累计已实现盈亏; 持仓从 0 建到再次归零算一笔。
-    加仓 / 减仓用加权平均成本摊销, 只有回到空仓那一刻才输出一行。
+    加仓 / 减仓用加权平均成本摊销, 回到空仓那一刻输出一行(open=False)。
 
     Args:
         fills: 成交明细(BacktestResult.fills), 至少含
             [bar, ts, ticker, side, amount, price, fee]。
+        marks: 期末盯市价(index 是证券代码); 给了就把回测结束时仍持有的仓位也输出
+            一行(open=True, exit_ts 是 NaT, pnl 是浮动盈亏、不含尚未发生的卖出费用)。
+            不给就只输出已平仓的回合(老行为)。
 
     Returns:
         DataFrame, 列 _TRADE_COLUMNS; 没有成交时是带列名的空表。
@@ -180,19 +206,19 @@ def trades(fills: pd.DataFrame) -> pd.DataFrame:
     """
     if fills is None or len(fills) == 0:
         return pd.DataFrame(columns=_TRADE_COLUMNS)
-    state: dict[str, dict[str, float]] = {}
+    has_marks = marks is not None and len(marks) > 0
+    state: dict[str, dict[str, object]] = {}
     out: list[dict[str, object]] = []
     for row in fills.sort_values("bar").to_dict("records"):
         ticker = str(row["ticker"])
-        st = state.setdefault(ticker, {"qty": 0.0, "cost": 0.0, "fees": 0.0, "realized": 0.0,
-                                       "entry_ts": None, "entry_bar": 0, "entry_px": 0.0,
-                                       "bought": 0.0})
+        st = state.setdefault(ticker, dict(_EMPTY_STATE))
         px, amount, fee = float(row["price"]), float(row["amount"]), float(row["fee"])
         if row["side"] == "buy":
-            # 从空仓开始买入时, 记下这笔回合的起点
+            # 从空仓开始买入时, 记下这笔回合的起点(含触发它的 event_id)
             if st["qty"] == 0:
                 st["entry_ts"], st["entry_bar"], st["entry_px"] = row["ts"], int(row["bar"]), px
                 st["bought"] = 0.0
+                st["entry_event"] = str(row.get("event_id") or "")
             st["qty"] += amount
             st["cost"] += amount * px + fee      # 买入费用摊进成本
             st["fees"] += fee
@@ -212,9 +238,27 @@ def trades(fills: pd.DataFrame) -> pd.DataFrame:
                     "pnl": st["realized"],
                     "ret": st["realized"] / notional if notional else np.nan,
                     "fees": st["fees"], "bars": int(row["bar"]) - int(st["entry_bar"]),
+                    "open": False, "entry_event": st["entry_event"],
                 })
-                state[ticker] = {"qty": 0.0, "cost": 0.0, "fees": 0.0, "realized": 0.0,
-                                 "entry_ts": None, "entry_bar": 0, "entry_px": 0.0, "bought": 0.0}
+                state[ticker] = dict(_EMPTY_STATE)
+
+    if has_marks:
+        for ticker, st in state.items():
+            if st["qty"] <= 1e-9:
+                continue
+            mark = marks.get(ticker) if ticker in marks.index else None
+            if mark is None or not np.isfinite(mark):
+                continue
+            avg = st["cost"] / st["qty"]
+            notional = st["bought"] * st["entry_px"]
+            pnl = st["qty"] * (float(mark) - avg)      # 浮动盈亏, 卖出费用还没发生
+            out.append({
+                "ticker": ticker, "entry_ts": st["entry_ts"], "exit_ts": pd.NaT,
+                "qty": st["bought"], "entry_px": st["entry_px"], "exit_px": float(mark),
+                "pnl": pnl, "ret": pnl / notional if notional else np.nan,
+                "fees": st["fees"], "bars": np.nan, "open": True,
+                "entry_event": st["entry_event"],
+            })
     return pd.DataFrame(out, columns=_TRADE_COLUMNS)
 
 
@@ -289,26 +333,37 @@ def reject_reasons(orders: pd.DataFrame) -> pd.Series:
 def trade_stats(t: pd.DataFrame) -> pd.Series:
     """回合交易的汇总。
 
+    胜率 / 盈亏比 / 平均持有这些只统计**已平仓**回合; 期末还持有的仓位单独用
+    open_trades 计数(用 marks 盯市的浮动盈亏不进胜率), 免得"买入持有"看起来像
+    0 笔交易。
+
     Args:
         t: trades 的输出。
 
     Returns:
-        pd.Series, 含 trades(笔数) / win_rate / profit_factor / avg_pnl /
-        avg_ret / avg_bars / fees; 没有回合时笔数为 0, 其余为 NaN。
-        profit_factor = 盈利总额 / 亏损总额(绝对值); 没有亏损时为 NaN。
+        pd.Series, 含 trades(已平仓笔数) / open_trades(期末未平仓) / win_rate /
+        profit_factor / avg_pnl / avg_ret / avg_bars / fees; 没有回合时笔数为 0,
+        其余为 NaN。profit_factor = 盈利总额 / 亏损总额(绝对值); 没有亏损时为 NaN。
     """
+    empty = {"trades": 0, "open_trades": 0, "win_rate": np.nan, "profit_factor": np.nan,
+             "avg_pnl": np.nan, "avg_ret": np.nan, "avg_bars": np.nan, "fees": 0.0}
     if t is None or len(t) == 0:
-        return pd.Series({"trades": 0, "win_rate": np.nan, "profit_factor": np.nan,
-                          "avg_pnl": np.nan, "avg_ret": np.nan, "avg_bars": np.nan,
-                          "fees": 0.0})
-    wins, losses = t[t["pnl"] > 0], t[t["pnl"] <= 0]
+        return pd.Series(empty)
+    closed = t[~t["open"].astype(bool)] if "open" in t.columns else t
+    open_count = int(len(t) - len(closed))
+    if len(closed) == 0:
+        empty["open_trades"] = open_count
+        empty["fees"] = float(t["fees"].sum())
+        return pd.Series(empty)
+    wins, losses = closed[closed["pnl"] > 0], closed[closed["pnl"] <= 0]
     gross_loss = abs(float(losses["pnl"].sum()))
     return pd.Series({
-        "trades": len(t),
-        "win_rate": len(wins) / len(t),
+        "trades": len(closed),
+        "open_trades": open_count,
+        "win_rate": len(wins) / len(closed),
         "profit_factor": (float(wins["pnl"].sum()) / gross_loss) if gross_loss > 0 else np.nan,
-        "avg_pnl": float(t["pnl"].mean()),
-        "avg_ret": float(t["ret"].mean()),
-        "avg_bars": float(t["bars"].mean()),
+        "avg_pnl": float(closed["pnl"].mean()),
+        "avg_ret": float(closed["ret"].mean()),
+        "avg_bars": float(closed["bars"].mean()),
         "fees": float(t["fees"].sum()),
     })

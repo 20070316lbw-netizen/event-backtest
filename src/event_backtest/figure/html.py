@@ -31,6 +31,7 @@ from event_backtest.figure.html_assets import CSS, JS
 from event_backtest.metrics import (
     daily_nav,
     execution_stats,
+    last_marks,
     reject_reasons,
     summarize,
     trade_stats,
@@ -124,8 +125,10 @@ def _labels(index: pd.Index) -> list[str]:
 
 
 def _ts_text(value: Any) -> str:
-    """单个时间戳的表格写法: 零点只写日期, 否则带上时分。"""
+    """单个时间戳的表格写法: 零点只写日期, 否则带上时分; NaT 给 "-"。"""
     stamp = pd.Timestamp(value)
+    if pd.isna(stamp):
+        return "-"
     if stamp.hour or stamp.minute:
         return stamp.strftime("%Y-%m-%d %H:%M")
     return stamp.strftime("%Y-%m-%d")
@@ -287,7 +290,7 @@ def plot_tearsheet_html(result: BacktestResult, *, market: str = "us",
     nav = result.nav
     values = {**summarize(nav, market=market,
                           benchmark_nav=benchmark_nav(result, benchmark)).to_dict(),
-              **trade_stats(trades(result.fills)).to_dict(),
+              **trade_stats(trades(result.fills, marks=last_marks(result.market))).to_dict(),
               **execution_stats(result.orders, result.fills, nav).to_dict()}
     labels = _labels(nav.index)
 
@@ -299,7 +302,7 @@ def plot_tearsheet_html(result: BacktestResult, *, market: str = "us",
 
     # 净值在历史高点附近时除法会有 1e-17 级别的噪声, 那点"回撤"不是回撤, 归零
     drawdown = (nav / nav.cummax() - 1).mask(lambda s: s > -1e-9, 0.0)
-    trade_frame = trades(result.fills)
+    trade_frame = trades(result.fills, marks=last_marks(result.market))
 
     payload: dict[str, Any] = {
         "kind": "tearsheet",
@@ -348,7 +351,9 @@ def plot_tearsheet_html(result: BacktestResult, *, market: str = "us",
             "pnl": _num(row["pnl"]),
             "ret": _num(row["ret"]),
             "fees": _num(row["fees"]),
-            "bars": float(row["bars"]),
+            "bars": _num(row["bars"]),
+            "open": "是" if row.get("open") else "",
+            "entry_event": str(row.get("entry_event") or ""),
         } for row in trade_frame.to_dict("records")]
         payload["trades"] = _table(rows, [
             ("ticker", "代码", "text"), ("entry_ts", "开仓", "text"),
@@ -356,6 +361,7 @@ def plot_tearsheet_html(result: BacktestResult, *, market: str = "us",
             ("entry_px", "开仓价", "num2"), ("exit_px", "平仓价", "num2"),
             ("pnl", "盈亏", "money"), ("ret", "收益率", "pct2"),
             ("fees", "费用", "money"), ("bars", "持有 bar", "int"),
+            ("open", "未平仓", "text"), ("entry_event", "触发事件", "text"),
         ], title="回合交易", sortable=True)
 
     if len(result.orders):
@@ -422,8 +428,10 @@ def plot_comparison_html(results: Mapping[str, BacktestResult | Run], *, market:
     for name, result in models.items():
         frame_values = {**summarize(result.nav, market=market,
                                     benchmark_nav=benchmark_nav(result, benchmark)).to_dict(),
-                        **trade_stats(trades(result.fills)).to_dict(),
-                        **execution_stats(result.orders, result.fills, result.nav).to_dict()}
+                        **trade_stats(trades(result.fills,
+                                             marks=last_marks(result.market))).to_dict(),
+                        **execution_stats(result.orders, result.fills,
+                                          result.nav).to_dict()}
         rows.append({"name": str(name),
                      **{key: _num(frame_values.get(key)) if key != "name" else str(name)
                         for key, _, _ in _COMPARE_COLUMNS}})

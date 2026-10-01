@@ -113,7 +113,7 @@ class Context:
 
     # ---------------------------------------------------------- 下单
     def order(self, ticker: str | int, amount: int, *, limit: float | None = None,
-              stop: float | None = None, tag: str = "") -> Order | None:
+              stop: float | None = None, tag: str = "", event_id: str = "") -> Order | None:
         """下市价 / 限价 / 止损单; amount > 0 买, < 0 卖。
 
         Args:
@@ -123,6 +123,7 @@ class Context:
             stop: 止损 / 触发价。
             tag: 下单来源(如 "enter" / "exit:stop_loss"); 会原样记进委托明细,
                 用来回答"这笔单是哪个信号 / 哪条出场规则下的"。
+            event_id: 触发这笔单的事件 id; 会一路带到成交与回合交易, 用来归因。
 
         Returns:
             新建的 Order(下一根 bar 才撮合); amount 为 0 时返回 None。
@@ -131,12 +132,13 @@ class Context:
         if amount == 0:
             return None
         order = Order(index=self._resolve(ticker), amount=amount, created=self.bar,
-                      limit=limit, stop=stop, tag=str(tag))
+                      limit=limit, stop=stop, tag=str(tag), event_id=str(event_id))
         self._pending.append(order)
         return order
 
     def order_target_percent(self, ticker: str | int, percent: float,
-                             field: str = "close", *, tag: str = "") -> Order | None:
+                             field: str = "close", *, tag: str = "",
+                             event_id: str = "") -> Order | None:
         """调到目标净值占比。
 
         用当前 bar 的 field 价把"目标市值"换算成股数, 再减去现有持仓, 得到要买 / 卖的
@@ -147,6 +149,7 @@ class Context:
             percent: 目标市值占净值的比例(1.0 = 满仓该证券, 0 = 清仓)。
             field: 换算用的价格字段。
             tag: 下单来源; 同 order 的 tag。
+            event_id: 触发这笔单的事件 id; 同 order 的 event_id。
 
         Returns:
             新建的 Order; 当前缺价或价格非正时返回 None(不下单)。
@@ -155,8 +158,16 @@ class Context:
         px = getattr(self.market, field)[self.bar, i]
         if not np.isfinite(px) or px <= 0:
             return None
-        delta = (percent * self.nav() - self.portfolio.total[i] * px) / px
-        return self.order(i, int(delta), tag=tag)
+        delta = int((percent * self.nav() - self.portfolio.total[i] * px) / px)
+        # 整手市场(如 A 股 100 股): 委托量先按整手取整, 否则会出现"委托 196 股 ->
+        # 成交 100 股 -> 剩 96 股零头反复重试后被拒"的假拒单。清仓时连零股一起卖。
+        lot = int(self.rules.lot_size)
+        if lot > 1 and delta:
+            if percent <= 0 and self.portfolio.total[i] > 0:
+                delta = -int(self.portfolio.total[i])
+            else:
+                delta = (abs(delta) // lot) * lot * (1 if delta > 0 else -1)
+        return self.order(i, delta, tag=tag, event_id=event_id)
 
     def take_orders(self) -> list[Order]:
         """取走本次 handle_data 产生的全部订单, 并清空暂存。"""
@@ -332,6 +343,7 @@ def _orders_frame(orders: list[Order], market: MarketData) -> pd.DataFrame:
             "side": "buy" if o.is_buy else "sell",
             "amount": abs(o.amount), "filled": abs(o.filled),
             "status": o.status, "reason": o.reason, "tag": o.tag,
+            "event_id": o.event_id,
             "limit": o.limit if o.limit is not None else np.nan,
             "stop": o.stop if o.stop is not None else np.nan,
         }
@@ -341,7 +353,8 @@ def _orders_frame(orders: list[Order], market: MarketData) -> pd.DataFrame:
 
 def _fills_frame(fills: list[Fill], market: MarketData) -> pd.DataFrame:
     """成交列表 -> DataFrame, 把下标翻译成代码, 方向翻译成 buy / sell。"""
-    columns = ["ts", "bar", "ticker", "side", "amount", "price", "fee", "order_created"]
+    columns = ["ts", "bar", "ticker", "side", "amount", "price", "fee", "order_created",
+               "event_id"]
     if not fills:
         return pd.DataFrame(columns=columns)
     return pd.DataFrame([
@@ -349,6 +362,7 @@ def _fills_frame(fills: list[Fill], market: MarketData) -> pd.DataFrame:
             "ts": pd.Timestamp(f.ts), "bar": f.bar, "ticker": market.tickers[f.index],
             "side": "buy" if f.amount > 0 else "sell", "amount": abs(f.amount),
             "price": f.price, "fee": f.fee, "order_created": f.order_created,
+            "event_id": f.event_id,
         }
         for f in fills
     ], columns=columns)

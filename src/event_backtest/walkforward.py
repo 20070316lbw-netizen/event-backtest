@@ -221,10 +221,11 @@ def run_walk_forward(cfg: MarketConfig, spec: StrategySpec, *, market: MarketDat
         values = fold_spec.compute(extended)
         events = fold_spec.events(values, extended)
         offset, stop = fold.test_bars
-        event_bars = _fold_event_bars(events, market.tickers, offset, stop - offset)
+        event_bars, event_ids = _fold_event_bars(events, market.tickers, offset,
+                                                 stop - offset)
         # 3. 引擎只在测试段上跑(事件已注入, 不再现场重算)
         result = run_backtest(
-            DeclarativeStrategy(fold_spec, event_bars=event_bars),
+            DeclarativeStrategy(fold_spec, event_bars=event_bars, event_ids=event_ids),
             slice_market(market, offset, stop),
             initial_cash=cfg.initial_cash, fees=cfg.resolved_fees(),
             fill_price=cfg.fill_price, slippage=cfg.slippage, rules=cfg.resolved_rules())
@@ -237,15 +238,30 @@ def run_walk_forward(cfg: MarketConfig, spec: StrategySpec, *, market: MarketDat
 
 
 def _fold_event_bars(events: pd.DataFrame, tickers: tuple[str, ...], offset: int,
-                     length: int) -> list[set[int]]:
-    """把事件表裁到测试段, 并平移到"相对本段行情"的 bar 下标。"""
-    out: list[set[int]] = [set() for _ in tickers]
+                     length: int) -> tuple[list[set[int]], list[dict[int, str]]]:
+    """把事件表裁到测试段, 平移到"相对本段行情"的下标, 并保留事件 id。
+
+    Args:
+        events: 事件表(至少含 ticker / bar / event_id)。
+        tickers: 本次行情的证券顺序。
+        offset: 测试段起点在全局 bar 轴上的下标。
+        length: 测试段 bar 数。
+
+    Returns:
+        (每只证券的事件 bar 集合, 每只证券的 {bar: event_id}); 两者一一对应。
+    """
+    bars: list[set[int]] = [set() for _ in tickers]
+    ids: list[dict[int, str]] = [{} for _ in tickers]
     index = {t: i for i, t in enumerate(tickers)}
     for row in events.to_dict("records"):
+        position = index.get(str(row["ticker"]))
+        if position is None:
+            continue
         bar = int(row["bar"]) - offset
-        if 0 <= bar < length and str(row["ticker"]) in index:
-            out[index[str(row["ticker"])]].add(bar)
-    return out
+        if 0 <= bar < length:
+            bars[position].add(bar)
+            ids[position][bar] = str(row["event_id"])
+    return bars, ids
 
 
 def _stitch(navs: list[pd.Series], initial: float) -> pd.Series:

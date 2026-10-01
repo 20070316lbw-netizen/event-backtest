@@ -1,19 +1,36 @@
-# 相对成交量: 当前 bar 成交量 / 之前 window 根 bar 的平均成交量(格式对齐 minievent)。
-# 以 T+0 为前提书写: 分子用当前 bar; 分母的 shift(1) 是为了"只和过去比"。
+# =============================================================================
+# 因子: relative_volume(相对成交量)
+#
+# 因子就是一张"行情 -> 一列数"的配方: 按 steps 一步步算, 最后 output 指向结果。
+# 三种操作数写法:
+#   {variable: volume}     行情字段, 或前面某个 step 的 id
+#   {parameter: window}    策略里传进来的参数(必须在 parameters 里声明)
+#   {constant: 1.0}        常数
+# 每个 step 的 id 就是它的输出名, 后面的步骤用 {variable: <那个 id>} 引用它。
+# 全部可用运算见 README 的「因子 YAML 速查」; 也可以跑
+#   event-backtest show factor relative_volume
+# 看这个文件和解析结果。
+# =============================================================================
+
 name: relative_volume
 description: 当前 bar 成交量除以之前 window 根 bar 的平均成交量
-parameters: [window]
+parameters: [window]              # 策略里写 relative_volume: {window: 16}, 16 就是它
+
+# 以 T+0 为前提书写: 分子直接用当前 bar; 分母先 shift(1) 再求均值, 也就是"只和过去比"。
 steps:
-  - id: previous_volume
-    operation: shift
-    input: {variable: volume}
+  - id: previous_volume           # 步骤输出名, 后面可以 {variable: previous_volume}
+    operation: shift              # 把序列整体往后挪 periods 根
+    input: {variable: volume}     # volume 是行情字段(成交量)
     periods: {constant: 1}
-  - id: average_previous_volume
+
+  - id: average_previous_volume   # 过去 window 根的平均成交量
     operation: rolling_mean
     input: {variable: previous_volume}
     window: {parameter: window}
+
   - id: result
-    operation: divide
+    operation: divide             # 逐元素相除; 分母为 0 的位置记 NaN
     numerator: {variable: volume}
     denominator: {variable: average_previous_volume}
-output: result
+
+output: result                    # 因子最终输出哪一个 step(也可以直接写行情字段)

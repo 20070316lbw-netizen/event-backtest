@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, fields, is_dataclass
 from datetime import datetime
 from importlib import metadata
 from pathlib import Path
@@ -27,7 +27,7 @@ import pandas as pd
 from event_backtest.benchmark import benchmark_nav
 from event_backtest.engine import BacktestResult
 from event_backtest.evaluation.events import DEFAULT_HORIZONS, EventStudy, study_events
-from event_backtest.metrics import execution_stats, summarize, trade_stats, trades
+from event_backtest.metrics import execution_stats, last_marks, summarize, trade_stats, trades
 from event_backtest.report import print_result, result_sections, result_values
 
 if TYPE_CHECKING:  # 只给类型用, 避免 import 期就把 matplotlib 拖进来
@@ -37,7 +37,68 @@ if TYPE_CHECKING:  # 只给类型用, 避免 import 期就把 matplotlib 拖进�
     from event_backtest.figure import HtmlReport
     from event_backtest.strategy import StrategySpec
 
-__all__ = ["Run", "jsonable", "save_run"]
+__all__ = ["Metrics", "Run", "jsonable", "save_comparison", "save_run"]
+
+
+@dataclass(frozen=True)
+class Metrics:
+    """类型化的指标视图: 有属性名, 编辑器能补全; 缺的字段是 None。
+
+    值就是 report.result_values 的那一份(组合 + 交易 + 执行), 只是换成了具名属性,
+    所以 run.metrics().sharpe 与 run.summary()["sharpe"] 永远一致。
+    """
+
+    # 概览
+    bars: float | None = None
+    days: float | None = None
+    # 收益 / 风险
+    total_return: float | None = None
+    annual_return: float | None = None
+    annual_vol: float | None = None
+    sharpe: float | None = None
+    sortino: float | None = None
+    calmar: float | None = None
+    max_drawdown: float | None = None
+    max_drawdown_days: float | None = None
+    benchmark_return: float | None = None
+    excess_return: float | None = None
+    beta: float | None = None
+    # 回合交易
+    trades: float | None = None
+    open_trades: float | None = None
+    win_rate: float | None = None
+    profit_factor: float | None = None
+    avg_pnl: float | None = None
+    avg_ret: float | None = None
+    avg_bars: float | None = None
+    fees: float | None = None
+    # 执行
+    orders: float | None = None
+    filled_orders: float | None = None
+    rejected_orders: float | None = None
+    cancelled_orders: float | None = None
+    execution_rate: float | None = None
+    turnover: float | None = None
+    cost_ratio: float | None = None
+
+    @classmethod
+    def from_values(cls, values: Mapping[str, object]) -> Metrics:
+        """从 result_values 的字典里挑出已知字段; NaN / 缺字段都留 None。
+
+        Args:
+            values: report.result_values 的输出(或同结构的字典)。
+
+        Returns:
+            Metrics。
+        """
+        known = {item.name for item in fields(cls)}
+        clean: dict[str, float] = {}
+        for name in known:
+            value = values.get(name)
+            if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(
+                    float(value)):
+                clean[name] = float(value)
+        return cls(**clean)
 
 
 @dataclass(eq=False)
@@ -102,8 +163,8 @@ class Run:
                          benchmark_nav=self.benchmark_curve())
 
     def trade_frame(self) -> pd.DataFrame:
-        """回合交易(开仓到平仓)。"""
-        return trades(self.fills)
+        """回合交易(开仓到平仓); 期末未平仓的用最后收盘价盯市, open=True。"""
+        return trades(self.fills, marks=last_marks(self.result.market))
 
     def trade_stats(self) -> pd.Series:
         """回合交易的汇总(胜率 / 盈亏比 / 平均持有 ...)。"""
@@ -116,6 +177,10 @@ class Run:
     def values(self) -> dict[str, object]:
         """上面所有指标合成一个字典(HTML / 落盘 / 自定义报告用)。"""
         return result_values(self.result, market=self.market, benchmark=self.benchmark)
+
+    def metrics(self) -> Metrics:
+        """类型化指标(属性名可补全): run.metrics().sharpe / .execution_rate / ...。"""
+        return Metrics.from_values(self.values())
 
     def sections(self) -> list[tuple[str, list[tuple[str, str]]]]:
         """[(分组标题, [(中文标签, 值)])], 与 print_result 打印的一致。"""
@@ -201,7 +266,7 @@ def save_run(directory: str | Path, result: BacktestResult, *, market: str | Non
     result.nav.rename("nav").to_frame().to_parquet(out / "nav.parquet")
     result.fills.to_parquet(out / "fills.parquet")
     result.orders.to_parquet(out / "orders.parquet")
-    order_trades = trades(result.fills)
+    order_trades = trades(result.fills, marks=last_marks(result.market))
     order_trades.to_parquet(out / "trades.parquet")
     summarize(result.nav, market=market,
               benchmark_nav=benchmark_nav(result, benchmark)).rename("value").to_frame().to_csv(
@@ -228,6 +293,56 @@ def save_run(directory: str | Path, result: BacktestResult, *, market: str | Non
     (out / "run.json").write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8")
+    return out
+
+
+def save_comparison(directory: str | Path,
+                     runs: Mapping[str, Run | BacktestResult], *,
+                     market: str | None = None, benchmark: str | None = None,
+                     title: str = "场景对比", png: bool = True,
+                     html: bool = True) -> Path:
+    """把多场景结果写成一套文件(替掉脚本里那段样板)。
+
+    产出: `comparison.csv`(每行一个场景) / `comparison.png` / `comparison.html` /
+    `<场景名>.html`(每个场景一份 tearsheet)。
+
+    Args:
+        directory: 输出目录(自动创建)。
+        runs: {场景名: Run 或 BacktestResult}。
+        market: 年化口径; None 时从第一个 Run 里取, 再退到 "us"。
+        benchmark: 基准代码; None 时从第一个 Run 里取。
+        title: 图 / 页标题。
+        png: 是否出 matplotlib 版对比图。
+        html: 是否出 HTML 版对比页与各场景 tearsheet。
+
+    Returns:
+        输出目录的 Path。
+    """
+    from event_backtest.figure import plot_comparison, plot_comparison_html, plot_tearsheet_html
+    from event_backtest.report import compare_results
+
+    models = {str(name): (item.result if isinstance(item, Run) else item)
+              for name, item in runs.items()}
+    first = next(iter(runs.values()), None)
+    if market is None:
+        market = first.market if isinstance(first, Run) else str(
+            first.meta.get("market") or "us") if first is not None else "us"
+    if benchmark is None and isinstance(first, Run):
+        benchmark = first.benchmark
+
+    out = Path(directory)
+    out.mkdir(parents=True, exist_ok=True)
+    compare_results(models, market=market, benchmark=benchmark).to_csv(out / "comparison.csv")
+    if png:
+        plot_comparison({name: item.nav for name, item in models.items()}).savefig(
+            out / "comparison.png", dpi=120)
+    if html:
+        plot_comparison_html(models, market=market, benchmark=benchmark,
+                             title=title).save(out / "comparison.html")
+        for name, item in models.items():
+            safe = name.replace("/", "_")
+            plot_tearsheet_html(item, market=market, benchmark=benchmark,
+                                title=name).save(out / f"{safe}.html")
     return out
 
 

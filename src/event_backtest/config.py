@@ -19,7 +19,7 @@ import yaml
 from event_backtest.engine import BacktestResult, Context, ContextStrategy
 from event_backtest.engine import run as run_backtest
 from event_backtest.fees import FeeSchedule
-from event_backtest.market import DateLike, MarketData, load_market
+from event_backtest.market import DateLike, MarketData, load_market, load_market_cached
 from event_backtest.rules import MarketRules, default_rules
 from event_backtest.slippage import SlippageModel, make_slippage
 
@@ -112,6 +112,16 @@ class MarketConfig:
         return load_market(self.db_path, self.market, self.tickers, start, end,
                            freq=self.freq if freq is None else freq,
                            rules=self.resolved_rules())
+
+    def cached_load(self, start: DateLike | None = None, end: DateLike | None = None,
+                    freq: str | int | None = None) -> MarketData:
+        """读出行情, 但同一组参数复用缓存里的同一份(见 market.load_market_cached)。
+
+        适合"一份行情喂很多次回测"; 拿到的是同一份对象, 别就地改它的数组。
+        """
+        return load_market_cached(self.db_path, self.market, self.tickers, start, end,
+                                  freq=self.freq if freq is None else freq,
+                                  rules=self.resolved_rules())
 
     def run(self, strategy: ContextStrategy | Callable[[Context], None],
             start: DateLike | None = None, end: DateLike | None = None,

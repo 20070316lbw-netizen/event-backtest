@@ -1,4 +1,8 @@
-# 策略: 纯动量(演示用第二个策略, 方便和 volume_breakout 做场景对比)
+# =============================================================================
+# 策略: 纯动量(演示用的第二个策略, 方便和 volume_breakout 做场景对比)
+# 结构说明见 volume_breakout.yaml 顶部; 这里是"只有一个因子 + 只按时间出场"的最小例子。
+# =============================================================================
+
 name: 纯动量
 
 factors:
@@ -8,10 +12,10 @@ signal:
   name: momentum
   trigger: enter
   all:
-    - {factor: momentum, operation: greater_than, value: 0}
+    - {factor: momentum, operation: greater_than, value: 0}   # 8 根动量为正就进
 
 exit:
-  hold_bars: 8
+  hold_bars: 8                        # 只按时间出场, 不设止盈止损
 
 sizing:
-  max_positions: 3
+  max_positions: 3                    # 每笔约 1/3 净值(不写 percent 时按这个分摊)

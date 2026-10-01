@@ -81,6 +81,57 @@ def test_run_save_can_add_html(tmp_path):
     assert (out / "tearsheet.html").exists() and (out / "run.json").exists()
 
 
+def test_metrics_typed_view():
+    result = _result()
+    result.meta.update({"market": "us"})
+    metrics = Run(result).metrics()
+    assert metrics.bars == 6
+    assert metrics.total_return is not None and metrics.total_return > 0
+    assert metrics.orders is not None and metrics.orders >= 1
+    # NaN 的指标留 None, 而不是 NaN
+    assert metrics.sortino is None or isinstance(metrics.sortino, float)
+
+
+def test_market_cache_reuses_by_parameters(monkeypatch):
+    import event_backtest.market as market_module
+
+    calls: list[tuple] = []
+    sentinel = make_market([[1.0], [2.0]])
+
+    def fake_load(db_path, market="us", tickers=None, start=None, end=None, *,
+                  freq=None, rules=None):
+        calls.append((db_path, market, tickers, start, end, freq))
+        return sentinel
+
+    monkeypatch.setattr(market_module, "load_market", fake_load)
+    market_module.clear_market_cache()
+    first = market_module.load_market_cached("x.db", "us", ("A",), "2024-01-01", "2024-12-31")
+    second = market_module.load_market_cached("x.db", "us", ("A",), "2024-01-01", "2024-12-31")
+    assert first is second and len(calls) == 1          # 同参数只读一次库
+
+    market_module.load_market_cached("x.db", "us", ("B",), "2024-01-01", "2024-12-31")
+    assert len(calls) == 2                              # 参数不同 -> 重新读
+
+    market_module.load_market_cached("x.db", "us", ("C",), "2024-01-01", "2024-12-31",
+                                     maxsize=1)         # 超上限 -> LRU 淘汰
+    assert len(calls) == 3
+    market_module.clear_market_cache()
+
+
+def test_save_comparison_writes_everything(tmp_path):
+    from event_backtest.results import save_comparison
+
+    first, second = _result(), _result(cash=2000.0)
+    first.meta.update({"market": "us"})
+    second.meta.update({"market": "us"})
+    out = save_comparison(tmp_path / "cmp", {"a": Run(first), "b": Run(second)},
+                          title="对比")
+    for name in ("comparison.csv", "comparison.png", "comparison.html", "a.html", "b.html"):
+        assert (out / name).exists(), name
+    csv = (out / "comparison.csv").read_text(encoding="utf-8")
+    assert "a" in csv and "b" in csv
+
+
 def test_jsonable_handles_numpy_nan_and_nested():
     payload = jsonable({"a": np.float64(1.5), "b": float("nan"), "c": np.int64(3),
                         "d": (1, np.bool_(True)), "e": pd.Timestamp("2024-01-02"),

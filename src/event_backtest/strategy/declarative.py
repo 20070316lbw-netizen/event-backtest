@@ -167,7 +167,8 @@ class Sizing:
     """仓位分配。
 
     Attributes:
-        percent: 每个仓位占净值的比例; None 表示等权 1/N(N = 证券数)。
+        percent: 每个仓位占净值的比例; None 表示不写死 —— 设了 max_positions 就按
+            1 / max_positions 等权分摊, 否则退到全池等权 1 / N(N = 证券数)。
         max_positions: 最多同时持有几个仓位; None 表示不限。
     """
 
@@ -391,7 +392,8 @@ class DeclarativeStrategy(Strategy):
     """
 
     def __init__(self, spec: StrategySpec, *,
-                 event_bars: list[set[int]] | None = None) -> None:
+                 event_bars: list[set[int]] | None = None,
+                 event_ids: list[dict[int, str]] | None = None) -> None:
         """
 
         Args:
@@ -399,25 +401,35 @@ class DeclarativeStrategy(Strategy):
             event_bars: 可选; 每只证券有事件的 bar 下标集合(相对本次要跑的行情)。
                 给了就直接用, 不再从 ctx.market 现场算 —— walk-forward 用它把
                 "在更长历史上算好的事件"注入到只含测试段的行情上。
+            event_ids: 可选; 与 event_bars 对应的 {bar: event_id}, 用来把下单 /
+                成交 / 回合归因到具体事件。不给就只有 bar 没有 id。
         """
         self.spec = spec
         self._event_bars = event_bars
+        self._event_ids = event_ids
 
     def initialize(self, ctx: Context) -> None:
-        """预计算因子与事件, 并把"每只证券在第几根 bar 有事件"整理成集合。"""
+        """预计算因子与事件, 整理成"每只证券在第几根 bar 有事件"(含事件 id)。"""
         self.n = len(ctx.tickers)
+        index = {t: i for i, t in enumerate(ctx.tickers)}
         if self._event_bars is not None:
             self.event_bars = self._event_bars
+            self.event_id_at = (self._event_ids if self._event_ids is not None
+                                else [{} for _ in range(self.n)])
         else:
             values = self.spec.compute(ctx.market)
             events = self.spec.events(values, ctx.market)
-            index = {t: i for i, t in enumerate(ctx.tickers)}
             self.event_bars = [set() for _ in range(self.n)]
+            self.event_id_at = [{} for _ in range(self.n)]
             for row in events.to_dict("records"):
-                self.event_bars[index[str(row["ticker"])]].add(int(row["bar"]))
-        # 记录每只证券当前这笔持仓的开仓 bar 与开仓价(后复权), 供 exit 规则判断
+                position = index[str(row["ticker"])]
+                bar = int(row["bar"])
+                self.event_bars[position].add(bar)
+                self.event_id_at[position][bar] = str(row["event_id"])
+        # 记录每只证券当前这笔持仓的开仓 bar / 开仓价(后复权) / 触发事件, 供 exit 与归因用
         self.entry_bar = np.full(self.n, -1, dtype=int)
         self.entry_px = np.full(self.n, np.nan)
+        self.entry_event: list[str] = [""] * self.n
 
     def handle_data(self, ctx: Context) -> None:
         """先处理出场(腾出仓位), 再处理入场。"""
@@ -432,9 +444,11 @@ class DeclarativeStrategy(Strategy):
             if self.entry_bar[i] < 0:
                 self.entry_bar[i] = fill.bar
                 self.entry_px[i] = float(ctx.market.adj_close[fill.bar, i])
+                self.entry_event[i] = fill.event_id
         elif ctx.portfolio.total[i] <= 0:
             self.entry_bar[i] = -1
             self.entry_px[i] = np.nan
+            self.entry_event[i] = ""
 
     def _handle_exits(self, ctx: Context) -> None:
         """对每个持仓检查 hold_bars / take_profit / stop_loss, 满足就市价平掉。"""
@@ -460,8 +474,10 @@ class DeclarativeStrategy(Strategy):
                 reason = "hold_bars"
             if reason is not None:
                 # 卖出数量 = 当前全部持仓; 下一根撮合, 没成交(如跌停)会在下一根重试。
-                # reason 记进委托明细, 期末复盘能看到"这笔平仓是止损还是到期"。
-                ctx.order(i, -int(ctx.position(i)), tag=f"exit:{reason}")
+                # reason 记进委托明细, 期末复盘能看到"这笔平仓是止损还是到期";
+                # event_id 带的是这笔持仓的开仓事件, 于是回合能追到一个信号。
+                ctx.order(i, -int(ctx.position(i)), tag=f"exit:{reason}",
+                          event_id=self.entry_event[i])
 
     def _handle_entries(self, ctx: Context) -> None:
         """对每只有事件的证券, 在空仓且没超过持仓上限时按 sizing 建仓。"""
@@ -474,6 +490,20 @@ class DeclarativeStrategy(Strategy):
                 continue
             if max_positions is not None and held >= max_positions:
                 continue
-            ctx.order_target_percent(i, percent if percent is not None else 1.0 / self.n,
-                                     tag="enter")
+            ctx.order_target_percent(i, self._entry_percent(percent, max_positions),
+                                     tag="enter",
+                                     event_id=self.event_id_at[i].get(ctx.bar, ""))
             held += 1
+
+    def _entry_percent(self, percent: float | None, max_positions: int | None) -> float:
+        """单笔建仓占净值的比例。
+
+        显式写了 sizing.percent 就用它; 否则: 设了 max_positions 就按"最多同时持有
+        几只"等权分摊(1 / max_positions), 没设才退到全池等权(1 / N) —— 全池等权在
+        几百只证券的池子上会算出每笔百分之零点几的仓位, 基本等于没投。
+        """
+        if percent is not None:
+            return float(percent)
+        if max_positions:
+            return 1.0 / int(max_positions)
+        return 1.0 / self.n

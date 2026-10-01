@@ -23,10 +23,10 @@ from loguru import logger
 from event_backtest.config import SETTING_DIR
 from event_backtest.evaluation import EventStudy
 from event_backtest.facade import UNSET, EventBackTest
-from event_backtest.factor import load_specs
+from event_backtest.factor import FACTOR_DIR, load_specs
 from event_backtest.metrics import reject_reasons
 from event_backtest.results import Run, jsonable
-from event_backtest.strategy import STRATEGIES, STRATEGY_DIR
+from event_backtest.strategy import STRATEGIES, STRATEGY_DIR, load_strategy
 
 __all__ = ["main"]
 
@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "list":
         return _list()
+    if args.command == "show":
+        return _show(args)
     return _run(args)
 
 
@@ -70,6 +72,10 @@ def _parser() -> argparse.ArgumentParser:
     run_p.add_argument("--slow", type=int, default=20, help="sma_cross 慢线窗口")
 
     sub.add_parser("list", help="列出配置 / 策略 / 因子")
+
+    show_p = sub.add_parser("show", help="打印因子 / 策略的 yaml 原文(带注释)与解析要点")
+    show_p.add_argument("kind", choices=("factor", "strategy"), help="看因子还是策略")
+    show_p.add_argument("name", help="因子 / 策略名(yaml 文件名)")
     return parser
 
 
@@ -149,6 +155,54 @@ def _report_json(run: Run, study: EventStudy | None, args: argparse.Namespace) -
         },
         "output": str(Path(args.output).resolve()) if args.output else None,
     }
+
+
+def _show(args: argparse.Namespace) -> int:
+    """打印因子 / 策略的 yaml 原文(注释就是文档)与解析出来的要点。
+
+    Args:
+        args: 命令行参数(kind / name)。
+
+    Returns:
+        0 成功。
+
+    Raises:
+        SystemExit: 名字不存在(并列出可用的)。
+    """
+    if args.kind == "factor":
+        catalogue = load_specs()
+        if args.name not in catalogue:
+            raise SystemExit(f"没有因子 {args.name!r}; 可用的有 {sorted(catalogue)}")
+        spec = catalogue[args.name]
+        print((FACTOR_DIR / f"{args.name}.yaml").read_text(encoding="utf-8").rstrip())
+        print()
+        print(f"--- 解析: 因子 {spec.name} | 参数 {list(spec.params)} | 输出 {spec.output}")
+        for index, step in enumerate(spec.steps, start=1):
+            operands = {key: value for key, value in step.items()
+                        if key not in ("id", "operation")}
+            print(f"    {index}. {step.get('id')} = {step.get('operation')} {operands}")
+        return 0
+
+    path = STRATEGY_DIR / f"{args.name}.yaml"
+    if not path.is_file():
+        available = sorted(item.stem for item in STRATEGY_DIR.glob("*.yaml"))
+        raise SystemExit(f"没有策略 {args.name!r}; 可用的有 {available}")
+    spec = load_strategy(args.name)
+    print(path.read_text(encoding="utf-8").rstrip())
+    print()
+    print(f"--- 解析: 策略 {spec.name}")
+    factors = ", ".join(
+        f"{ref.alias}({', '.join(f'{key}={value}' for key, value in ref.params.items())})"
+        for ref in spec.factors)
+    print(f"    因子: {factors or '(无)'}")
+    if spec.signal is not None:
+        print(f"    信号: {spec.signal.name} | trigger={spec.signal.trigger}(条件看上面 yaml)")
+    rules = spec.exit
+    print(f"    出场: hold_bars={rules.hold_bars} take_profit={rules.take_profit} "
+          f"stop_loss={rules.stop_loss}")
+    print(f"    仓位: percent={spec.sizing.percent} max_positions={spec.sizing.max_positions}")
+    print(f"    walk-forward: {spec.walk_forward}")
+    return 0
 
 
 def _list() -> int:

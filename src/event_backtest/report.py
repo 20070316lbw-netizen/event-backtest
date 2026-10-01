@@ -18,7 +18,14 @@ from rich.table import Table
 
 from event_backtest.benchmark import benchmark_nav
 from event_backtest.engine import BacktestResult
-from event_backtest.metrics import execution_stats, reject_reasons, summarize, trade_stats, trades
+from event_backtest.metrics import (
+    execution_stats,
+    last_marks,
+    reject_reasons,
+    summarize,
+    trade_stats,
+    trades,
+)
 
 # (分组标题, [(字段名, 中文标签), ...]); 字段取不到就跳过那一行。
 # 前半段来自 metrics.summarize, 后半段来自 trade_stats。
@@ -30,7 +37,8 @@ _SECTIONS: list[tuple[str, list[tuple[str, str]]]] = [
     ("风险", [("annual_vol", "年化波动率"), ("max_drawdown", "最大回撤"),
              ("max_drawdown_days", "最长回撤 [交易日]"), ("beta", "Beta")]),
     ("风险调整后收益", [("sharpe", "Sharpe"), ("sortino", "Sortino"), ("calmar", "Calmar")]),
-    ("交易", [("trades", "回合数"), ("win_rate", "胜率"), ("profit_factor", "盈亏比"),
+    ("交易", [("trades", "回合数"), ("open_trades", "期末未平仓"), ("win_rate", "胜率"),
+             ("profit_factor", "盈亏比"),
              ("avg_pnl", "平均每笔盈亏"), ("avg_ret", "平均每笔收益率"),
              ("avg_bars", "平均持有 bar"), ("fees", "总费用")]),
     ("执行", [("orders", "委托笔数"), ("filled_orders", "完全成交笔数"),
@@ -68,7 +76,7 @@ def result_values(result: BacktestResult, *, market: str = "us",
     """
     summary = summarize(result.nav, market=market,
                         benchmark_nav=benchmark_nav(result, benchmark))
-    stats = trade_stats(trades(result.fills))
+    stats = trade_stats(trades(result.fills, marks=last_marks(result.market)))
     execution = execution_stats(result.orders, result.fills, result.nav)
     return {**summary.to_dict(), **stats.to_dict(), **execution.to_dict()}
 
@@ -146,7 +154,7 @@ def compare_results(results: Mapping[str, BacktestResult], *, market: str = "us"
     for name, result in results.items():
         summary = summarize(result.nav, market=market,
                             benchmark_nav=benchmark_nav(result, benchmark))
-        stats = trade_stats(trades(result.fills))
+        stats = trade_stats(trades(result.fills, marks=last_marks(result.market)))
         execution = execution_stats(result.orders, result.fills, result.nav)
         rows[str(name)] = {**summary.to_dict(), **stats.to_dict(), **execution.to_dict()}
     return pd.DataFrame.from_dict(rows, orient="index")

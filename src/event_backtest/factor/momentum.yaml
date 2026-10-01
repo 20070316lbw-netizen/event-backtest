@@ -1,18 +1,27 @@
-# 动量: 截至当前 bar(含)的 window 根 bar 涨跌幅。价格用后复权收盘价。
+# =============================================================================
+# 因子: momentum(动量 / 区间涨跌幅)
+#
+# 结构说明见 relative_volume.yaml 顶部; 这里演示"只用行情字段 + 常数"的写法。
+# =============================================================================
+
 name: momentum
 description: 截至当前 bar(含)的 window 根 bar 涨跌幅
-parameters: [window]
+parameters: [window]              # 策略里写 momentum: {window: 8}, 8 就是它
+
 steps:
   - id: price_window_bars_ago
     operation: shift
-    input: {variable: price}
+    input: {variable: price}      # price = 后复权收盘价(行情字段, 见 market_frames)
     periods: {parameter: window}
+
   - id: price_ratio
     operation: divide
     numerator: {variable: price}
     denominator: {variable: price_window_bars_ago}
+
   - id: result
-    operation: subtract
+    operation: subtract           # 比值 - 1 = 涨跌幅
     left: {variable: price_ratio}
     right: {constant: 1.0}
+
 output: result

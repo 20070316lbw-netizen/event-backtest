@@ -5,11 +5,12 @@ from dataclasses import replace
 
 import numpy as np
 import pandas as pd
+import pytest
 from helpers import make_market
 
 from event_backtest.config import MarketConfig
 from event_backtest.strategy import parse_strategy
-from event_backtest.sweep import expand_grid, make_grid_select, search, set_path
+from event_backtest.sweep import SweepError, expand_grid, make_grid_select, search, set_path
 from event_backtest.walkforward import run_walk_forward
 
 _RAW = {"name": "t", "factors": [{"momentum": {"window": 4}}],
@@ -35,6 +36,39 @@ def test_set_path_and_expand_grid():
     assert node["exit"]["hold_bars"] == 8
     assert len(expand_grid({"a": [1, 2], "b": [3, 4, 5]})) == 6
     assert expand_grid({}) == [{}]          # 空网格也会跑一次(不扫)
+
+
+def test_set_path_creates_missing_segments():
+    """yaml 里没写的段也能扫: 中间缺的 dict / list 自动补出来。"""
+    node: dict = {}
+    set_path(node, "sizing.percent", 0.5)
+    assert node == {"sizing": {"percent": 0.5}}
+
+    nested: dict = {}
+    set_path(nested, "factors[1].momentum.window", 8)
+    assert nested["factors"][0] == {} and nested["factors"][1]["momentum"]["window"] == 8
+
+
+def test_set_path_rejects_crossing_scalar():
+    with pytest.raises(SweepError, match="标量"):
+        set_path({"exit": {"hold_bars": 4}}, "exit.hold_bars.extra", 1)
+    with pytest.raises(SweepError, match="空串"):
+        set_path({}, "", 1)
+
+
+def test_evaluate_spec_exposes_all_metrics():
+    """指标口径与报告一致, 所以能扫 calmar / win_rate / 执行率这些。"""
+    cfg = MarketConfig(market="us", db_path="unused.db", initial_cash=1000.0)
+    for metric in ("sharpe", "calmar", "sortino", "win_rate", "cost_ratio", "fills"):
+        outcome = search(_RAW, {"exit.hold_bars": [4, 8]}, cfg, _market(), metric=metric)
+        assert metric in outcome.table.columns
+        assert len(outcome.table) == 2
+
+
+def test_search_rejects_unknown_metric():
+    cfg = MarketConfig(market="us", db_path="unused.db", initial_cash=1000.0)
+    with pytest.raises(SweepError, match="不在评估指标里"):
+        search(_RAW, {"exit.hold_bars": [4]}, cfg, _market(), metric="夏普")
 
 
 def test_search_picks_best_by_metric():

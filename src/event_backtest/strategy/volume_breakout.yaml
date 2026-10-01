@@ -1,30 +1,49 @@
-# 策略: 放量突破(声明式, 格式对齐 minievent)
-# 条件在第 t 根收盘后判断, 第 t+1 根撮合; 因子以 T+0 为前提书写, 不自己 shift。
+# =============================================================================
+# 策略: 放量突破(声明式策略模板, 建议照着改)
+#
+# 一个策略 yaml 由五段组成, 每段都可选:
+#   walk_forward  样本外切分(不写就不做)
+#   factors       启用哪些因子, 以及给它们的参数
+#   signal        什么条件下算"信号"; trigger: enter(只在由不满足变满足时触发一次)
+#                 还是 every_bar(每根都算)
+#   exit          出场规则: 最多持有多少根 / 止盈 / 止损
+#   sizing        每个仓位多大, 最多同时持几个
+#
+# 时序: 第 t 根收盘后用截至第 t 根的数据算信号, 第 t+1 根成交 —— 不用自己 shift(1)。
+# 因子写法见 factor/*.yaml; 也可以跑 event-backtest show strategy volume_breakout。
+# =============================================================================
+
 name: 放量突破
 
 # walk-forward(可选): 不写就不做; start 省略 = 用数据第一个交易日。
-# 跑法见 scripts/run_walk_forward.py。
+# 跑法: scripts/run_walk_forward.py 或 EventBackTest.walk_forward()。
 walk_forward:
   folds: 2
-  train_days: 60
-  test_days: 30
-  embargo_days: 5
+  train_days: 60      # 每折训练段多少个交易日
+  test_days: 30       # 每折测试段多少个交易日
+  embargo_days: 5     # 训练段与测试段之间隔离几天(防止训练末尾的仓位泄到测试段)
 
-factors:
+factors:              # 启用因子; 键是 factor/<名字>.yaml, 值是传给它的参数
   - relative_volume: {window: 16}   # 当前 bar 成交量 / 之前 16 根(2 天)均值
   - momentum: {window: 8}           # 截至当前 bar 的 8 根(1 天)涨跌幅
 
 signal:
   name: volume_breakout
-  trigger: enter                    # 由不满足变满足时触发一次
-  all:
+  trigger: enter                    # enter(上升沿触发一次) / every_bar(每根都算)
+  all:                              # all = 全部条件都满足; 想"任一满足"用 any
     - {factor: relative_volume, operation: greater_than, value: 2}
     - {factor: momentum, operation: greater_than, value: 0}
+    # factor 这里指的是"上面 factors 里那一路因子的输出名"(默认就是因子名)
+    # 可用运算(6 个): greater_than / greater_than_or_equal / less_than /
+    #                less_than_or_equal / equal / not_equal
+    # all 改成 any 就是"任一条件满足"; 条件里因子是 NaN 一律算不满足
 
-exit:
-  hold_bars: 16                     # 最多持有 16 根 bar(2 天)
-  take_profit: 0.06
-  stop_loss: 0.04
+exit:                                 # 都不写 = 一直持有到回测结束
+  hold_bars: 16                       # 最多持有 16 根 bar(2 天)
+  take_profit: 0.06                   # 浮盈 6% 止盈
+  stop_loss: 0.04                     # 浮亏 4% 止损
 
 sizing:
-  max_positions: 3                  # 最多同时持有 3 只; 不写 percent 则等权 1/N
+  max_positions: 3                    # 最多同时持有 3 只
+  # percent 不写 = 每笔按 1 / max_positions 等权(这里约 33% 净值);
+  # 想固定比例就写 percent: 0.1(每笔 10%)。两者都不写时才退到全池等权 1 / N。

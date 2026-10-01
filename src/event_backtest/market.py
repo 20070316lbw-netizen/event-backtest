@@ -16,6 +16,7 @@ T 是 bar 数(所有证券时间戳的并集, 升序), N 是证券数。引擎�
 """
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
@@ -393,6 +394,53 @@ def build_us_market(prices: pd.DataFrame, *, tickers: Sequence[str] | None = Non
 
 
 # ---------------------------------------------------------------- helpers
+
+# 进程内行情缓存: 只给显式调用 load_market_cached 的调用者用(默认不缓存, 免得吃内存)
+_MARKET_CACHE: OrderedDict[tuple, MarketData] = OrderedDict()
+
+
+def load_market_cached(db_path: str | Path, market: str = "us",
+                       tickers: Sequence[str] | None = None,
+                       start: DateLike | None = None, end: DateLike | None = None, *,
+                       freq: str | int | None = None, rules: MarketRules | None = None,
+                       maxsize: int = 2) -> MarketData:
+    """load_market 的缓存版: 同一组参数只读一次库, 之后返回同一份 MarketData。
+
+    适合"一份行情喂很多次回测"(扫参 / 多策略对比)。注意两点:
+        - **别改返回值**: 拿到的是同一份对象, 就地改数组会污染后面的调用;
+          要改先自己 copy / slice。
+        - 缓存按"参数组合"存, maxsize 默认 2(全 S&P 500 那种一份就近 1GB)。
+
+    Args:
+        db_path / market / tickers / start / end / freq / rules: 同 load_market。
+        maxsize: 最多缓存几份行情; 超出按 LRU 丢掉最久没用的。
+
+    Returns:
+        MarketData(可能是缓存里的同一份对象)。
+
+    Raises:
+        FileNotFoundError / ValueError: 同 load_market。
+    """
+    key = (str(db_path), market, tuple(tickers) if tickers is not None else None,
+           str(start) if start is not None else None,
+           str(end) if end is not None else None,
+           None if freq is None else str(freq), repr(rules))
+    cached = _MARKET_CACHE.get(key)
+    if cached is not None:
+        _MARKET_CACHE.move_to_end(key)
+        return cached
+    data = load_market(db_path, market, tickers, start, end, freq=freq, rules=rules)
+    _MARKET_CACHE[key] = data
+    _MARKET_CACHE.move_to_end(key)
+    while len(_MARKET_CACHE) > max(1, int(maxsize)):
+        _MARKET_CACHE.popitem(last=False)
+    return data
+
+
+def clear_market_cache() -> None:
+    """清空 load_market_cached 的缓存(换库 / 换数据后调一次)。"""
+    _MARKET_CACHE.clear()
+
 
 def _pivot_fields(df: pd.DataFrame, index: str, ts: pd.DatetimeIndex,
                   cols: tuple[str, ...], fields: Sequence[str]) -> dict[str, np.ndarray]:

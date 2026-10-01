@@ -33,7 +33,7 @@ FILL_PRICES: tuple[str, ...] = ("open", "vwap")
 
 # 委托明细(BacktestResult.orders)的列, 顺序即列顺序
 ORDER_COLUMNS = ("ts", "bar", "ticker", "side", "amount", "filled", "status", "reason",
-                 "tag", "limit", "stop")
+                 "tag", "event_id", "limit", "stop")
 
 
 @dataclass
@@ -47,6 +47,7 @@ class Order:
         limit: 限价, None 表示市价。
         stop: 止损 / 触发价, None 表示不设。
         tag: 下单来源(如 "enter" / "exit:stop_loss"), 事后归因用。
+        event_id: 触发这笔单的事件 id(信号产生的), 没有就是空串。
         filled: 已成交数量(带方向)。
         status: open / filled / rejected / cancelled。
         reason: 被拒或状态变化的原因, 便于排查"为什么没成交"。
@@ -58,6 +59,7 @@ class Order:
     limit: float | None = None
     stop: float | None = None
     tag: str = ""
+    event_id: str = ""
     filled: int = 0
     status: str = OPEN
     reason: str = ""
@@ -85,6 +87,7 @@ class Fill:
         price: 成交价(已含滑点, 未复权)。
         fee: 这笔成交的费用。
         order_created: 下单时的 bar 下标, 可算"挂了几根才成交"。
+        event_id: 触发这笔成交的事件 id(从订单带过来), 用来把成交对回信号。
     """
 
     bar: int
@@ -94,6 +97,7 @@ class Fill:
     price: float
     fee: float
     order_created: int
+    event_id: str = ""
 
 
 @dataclass(eq=False)
@@ -260,7 +264,7 @@ def match_order(order: Order, bar: int, market: MarketData, portfolio: Portfolio
     if order.filled == order.amount:
         order.status = FILLED
     return Fill(bar=bar, ts=market.ts[bar], index=i, amount=amount, price=float(price),
-                fee=fill_fee, order_created=order.created)
+                fee=fill_fee, order_created=order.created, event_id=order.event_id)
 
 
 def _trigger_price(order: Order, base: float, o: float, h: float,
