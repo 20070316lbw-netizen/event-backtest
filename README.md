@@ -1,5 +1,7 @@
 # event-backtest
 
+[![CI](https://github.com/20070316lbw-netizen/event-backtest/actions/workflows/ci.yml/badge.svg)](https://github.com/20070316lbw-netizen/event-backtest/actions/workflows/ci.yml)
+
 轻量事件驱动回测框架, 同时支持 **A 股**与**美股**。设计参考
 [zipline-reloaded](https://github.com/stefan-jansen/zipline-reloaded) 的事件循环与订单
 模型, 以及 minievent 的对齐数组数据层、市场规则与声明式 YAML 策略约定。
