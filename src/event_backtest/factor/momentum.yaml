@@ -1,0 +1,18 @@
+# 动量: 截至当前 bar(含)的 window 根 bar 涨跌幅。价格用后复权收盘价。
+name: momentum
+description: 截至当前 bar(含)的 window 根 bar 涨跌幅
+parameters: [window]
+steps:
+  - id: price_window_bars_ago
+    operation: shift
+    input: {variable: price}
+    periods: {parameter: window}
+  - id: price_ratio
+    operation: divide
+    numerator: {variable: price}
+    denominator: {variable: price_window_bars_ago}
+  - id: result
+    operation: subtract
+    left: {variable: price_ratio}
+    right: {constant: 1.0}
+output: result

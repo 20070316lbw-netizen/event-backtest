@@ -1,0 +1,60 @@
+[project]
+name = "event-backtest"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "20070316lbw-netizen", email = "lbw20070316lbw@outlook.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "duckdb>=1.5.5",
+    "liudb",
+    "loguru>=0.7.3",
+    "matplotlib>=3.11.2",
+    "numpy>=2.5.3",
+    "pandas>=3.0.6",
+    "pyarrow>=21.0.0",
+    "pyyaml>=6.0.3",
+    "rich>=13.0.0",
+    "sources",
+]
+
+[project.scripts]
+event-backtest = "event_backtest.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.21,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+sources = { git = "https://github.com/20070316lbw-netizen/sources.git", rev = "v0.1.1" }
+liudb = { git = "https://github.com/20070316lbw-netizen/liudb.git" }
+
+[tool.uv]
+# 项目内缓存: 默认 ~/.cache/uv 在受限环境里不可写
+cache-dir = ".uv-cache"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.6,<0.17",
+]
+
+[tool.pytest.ini_options]
+# 源码里 docstring 的 Example 也当测试跑, 保证示例和实现一致
+testpaths = ["test", "src"]
+addopts = "--doctest-modules"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# 与 sources / liudb / minievent 保持一致, 显式写死规则集, 不吃 ruff 的默认值
+select = ["E", "W", "F", "I", "UP", "B", "C4", "SIM", "RUF", "BLE", "S"]
+# 注释和文档字符串通篇是中文, 全角标点是刻意的排版
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+"test/*" = ["S101"]

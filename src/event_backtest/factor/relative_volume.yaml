@@ -1,0 +1,19 @@
+# 相对成交量: 当前 bar 成交量 / 之前 window 根 bar 的平均成交量(格式对齐 minievent)。
+# 以 T+0 为前提书写: 分子用当前 bar; 分母的 shift(1) 是为了"只和过去比"。
+name: relative_volume
+description: 当前 bar 成交量除以之前 window 根 bar 的平均成交量
+parameters: [window]
+steps:
+  - id: previous_volume
+    operation: shift
+    input: {variable: volume}
+    periods: {constant: 1}
+  - id: average_previous_volume
+    operation: rolling_mean
+    input: {variable: previous_volume}
+    window: {parameter: window}
+  - id: result
+    operation: divide
+    numerator: {variable: volume}
+    denominator: {variable: average_previous_volume}
+output: result

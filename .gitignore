@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# uv 本地缓存(默认 ~/.cache/uv 在沙盒外不可写, 由 [tool.uv] cache-dir 指到这里)
+.uv-cache/
+
+# 本地数据库与回测结果(不进 git)
+data/
+outputs/
+
+# 测试 / lint 缓存
+.pytest_cache/
+.ruff_cache/
+
+# 日志
+*.log
+
+# macOS
+.DS_Store

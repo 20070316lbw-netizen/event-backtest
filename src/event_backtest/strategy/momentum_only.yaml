@@ -1,0 +1,17 @@
+# 策略: 纯动量(演示用第二个策略, 方便和 volume_breakout 做场景对比)
+name: 纯动量
+
+factors:
+  - momentum: {window: 8}
+
+signal:
+  name: momentum
+  trigger: enter
+  all:
+    - {factor: momentum, operation: greater_than, value: 0}
+
+exit:
+  hold_bars: 8
+
+sizing:
+  max_positions: 3

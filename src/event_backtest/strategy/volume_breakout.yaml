@@ -1,0 +1,30 @@
+# 策略: 放量突破(声明式, 格式对齐 minievent)
+# 条件在第 t 根收盘后判断, 第 t+1 根撮合; 因子以 T+0 为前提书写, 不自己 shift。
+name: 放量突破
+
+# walk-forward(可选): 不写就不做; start 省略 = 用数据第一个交易日。
+# 跑法见 scripts/run_walk_forward.py。
+walk_forward:
+  folds: 2
+  train_days: 60
+  test_days: 30
+  embargo_days: 5
+
+factors:
+  - relative_volume: {window: 16}   # 当前 bar 成交量 / 之前 16 根(2 天)均值
+  - momentum: {window: 8}           # 截至当前 bar 的 8 根(1 天)涨跌幅
+
+signal:
+  name: volume_breakout
+  trigger: enter                    # 由不满足变满足时触发一次
+  all:
+    - {factor: relative_volume, operation: greater_than, value: 2}
+    - {factor: momentum, operation: greater_than, value: 0}
+
+exit:
+  hold_bars: 16                     # 最多持有 16 根 bar(2 天)
+  take_profit: 0.06
+  stop_loss: 0.04
+
+sizing:
+  max_positions: 3                  # 最多同时持有 3 只; 不写 percent 则等权 1/N

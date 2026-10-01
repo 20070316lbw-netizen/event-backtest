@@ -1,0 +1,30 @@
+# 美股回测配置。字段写错 / 类型不对在加载时报错。
+market: us
+
+data:
+  db_path: ../../../data/sp500_10y.db   # 相对本文件所在目录
+  freq: null                            # 美股只有日线
+
+universe:
+  - AAPL
+  - MSFT
+
+benchmark: null
+
+account:
+  initial_cash: 100000
+
+execution:
+  fill_price: open                      # 市价单成交价: open / vwap
+                                        # 注: vwap 需要成交额(amount)数据, 当前美股库没有,
+                                        # 设成 vwap 会在开跑前直接报错(而不是悄悄全拒单)
+  # 滑点(可选), 两种: 
+  #   {type: fixed, spread: 0.01}
+  #   {type: volume_share, volume_limit: 0.025, price_impact: 0.1}
+
+fees:
+  stock:
+    commission: 0.0        # 多数美股券商已零佣
+    min_commission: 0.0
+    stamp_duty: 0.0
+    transfer_fee: 0.0

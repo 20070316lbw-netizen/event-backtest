@@ -1,0 +1,44 @@
+# A 股回测配置。universe 里的证券要先在数据池里、跑过更新才有行情。
+market: cn
+
+data:
+  db_path: ../../../data/ashare.db      # 需要先用 liudb 写入
+  freq: null                            # 日线; 分钟线在命令行用 --freq 30 覆盖
+
+universe:
+  - 510300.SH   # 沪深300ETF
+  - 510500.SH   # 中证500ETF
+  - 159915.SZ   # 创业板ETF, 涨跌幅 20%
+  - 588000.SH   # 科创50ETF, 涨跌幅 20%
+  - 518880.SH   # 黄金ETF, T+0
+  - 513100.SH   # 纳指ETF, T+0
+
+benchmark: 510300.SH
+
+account:
+  initial_cash: 1000000
+
+execution:
+  fill_price: open
+
+fees:
+  etf:
+    commission: 0.00025
+    min_commission: 5
+    stamp_duty: 0.0
+    transfer_fee: 0.0
+  stock:
+    commission: 0.00025
+    min_commission: 5
+    stamp_duty: 0.0005
+    transfer_fee: 0.00001
+
+# 交易规则覆盖(不写的字段用 CNMarketRules 默认值)
+rules:
+  main_limit: 0.10
+  growth_limit: 0.20
+  bse_limit: 0.30
+  fund_limit: 0.10
+  st_limits:
+    1998-04-22: 0.05
+    2026-07-06: 0.10
